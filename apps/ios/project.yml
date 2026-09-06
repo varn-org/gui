@@ -1,0 +1,80 @@
+name: VarnGUIGallery
+options:
+  bundleIdPrefix: dev.varn.gui
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+
+configs:
+  Debug: debug
+  Release: release
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: 99AHAA343Q
+    TARGETED_DEVICE_FAMILY: "1,2"
+
+targets:
+  VarnGUIGallery:
+    type: application
+    platform: iOS
+
+    sources:
+      - path: Sources
+      # The renderer is shared with the framework a consuming app would embed, so it is compiled from source here.
+      - path: ../../renderers/ios
+        name: Renderer
+        excludes:
+          - tests
+      # The framework is Lua, so it is carried into the bundle as a folder the engine reads from.
+      - path: ../../gui
+        name: gui
+        type: folder
+        buildPhase: resources
+      # The archive is built by: python3 run.py sample
+      - path: ../../sample/dist/gallery.vap
+        buildPhase: resources
+
+    dependencies:
+      # The released xcframework, fetched with: python3 run.py fetch-native
+      - framework: Frameworks/varn.xcframework
+        embed: true
+        codeSign: true
+
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Varn GUI
+        CFBundleShortVersionString: "1.0.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default
+                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).SceneDelegate
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.varn.gui.gallery
+
+  # A screen is proven by touching it, which is the one thing a tree-based case cannot do.
+  VarnGUIGalleryUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: VarnGUIGallery
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.varn.gui.gallery.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: VarnGUIGallery

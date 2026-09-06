@@ -1,0 +1,116 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suite:
+    name: lua suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the suite against a released engine
+        run: python3 run.py test
+
+      - name: Validate the sample application
+        run: |
+          python3 run.py sample
+          python3 run.py doctor sample/dist/gallery.vap
+
+  web:
+    name: web renderer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Check every module parses
+        run: |
+          for file in renderers/web/*.js renderers/web/tests/*.js apps/web/*.js; do
+            node --check "$file"
+          done
+
+      - name: Run the conformance suite against the DOM renderer
+        run: node renderers/web/tests/conformance.test.js
+
+      - name: Check the controls the browser has none of
+        run: node renderers/web/tests/controls.test.js
+
+      - name: Run the gallery against the wasm engine
+        run: |
+          python3 run.py fetch-native --platform web
+          python3 run.py web
+          node renderers/web/tests/gallery.test.js
+
+  ios:
+    name: ios renderer
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Typecheck against the iOS SDK
+        run: |
+          SDK=$(xcrun --sdk iphonesimulator --show-sdk-path)
+          xcrun swiftc -typecheck -sdk "$SDK" -target arm64-apple-ios15.0-simulator renderers/ios/*.swift
+
+      - name: Run the conformance suite in the simulator
+        run: |
+          brew install xcodegen
+          cd renderers/ios/tests
+          xcodegen generate
+          set -o pipefail
+          xcodebuild test \
+            -project VarnGUIRenderer.xcodeproj \
+            -scheme VarnGUIRendererTests \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            | grep -E "Executed [0-9]+ test|\*\* TEST"
+
+  android:
+    name: android renderer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Fetch the engine and pack the gallery
+        run: |
+          python3 run.py fetch-native --platform android
+          python3 run.py sample
+
+      - name: Build the sample application
+        run: |
+          cd apps/android
+          ./gradlew --no-daemon --max-workers=2 :app:assembleDebug
+
+      - name: Run the conformance suite against the Android renderer
+        run: |
+          cd apps/android
+          ./gradlew --no-daemon --max-workers=2 :app:testDebugUnitTest
+
+      - name: Check the apk carries the engine, the gallery and the renderer
+        run: |
+          APK=apps/android/app/build/outputs/apk/debug/app-debug.apk
+          unzip -l "$APK" | grep -q "assets/gallery.vap"
+          unzip -l "$APK" | grep -q "lib/arm64-v8a/libvarn.so"
+          DEXDUMP=$(ls "$ANDROID_HOME"/build-tools/*/dexdump | tail -1)
+          unzip -o -q "$APK" "classes*.dex" -d /tmp/dex
+          for dex in /tmp/dex/classes*.dex; do "$DEXDUMP" "$dex"; done > /tmp/dump.txt
+          grep -q "Ldev/varn/gui/VarnRenderer;" /tmp/dump.txt
+          grep -q "Ldev/varn/gui/gallery/MainActivity;" /tmp/dump.txt

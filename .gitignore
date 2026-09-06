@@ -1,0 +1,34 @@
+# the engine binary run.py downloads, and the cache an archive expands into
+/.varn/
+/.cache/
+
+# packed application archives
+/sample/dist/
+
+# build output from the sample hosts, and the projects xcodegen writes from a project.yml
+/.build/
+/apps/ios/build/
+/apps/ios/*.xcodeproj/
+/renderers/ios/tests/*.xcodeproj/
+/apps/ios/Frameworks/*.xcframework
+/apps/android/.gradle/
+/apps/android/.kotlin/
+/apps/android/build/
+/apps/android/app/build/
+/apps/android/app/libs/*.aar
+/apps/android/local.properties
+/apps/web/node_modules/
+/renderers/web/node_modules/
+/apps/web/dist/
+
+# what run.py assembles for the page: the engine, the framework and the packed gallery
+/apps/web/varn_wasm.*
+/apps/web/framework.zip
+/apps/web/gallery.vap
+
+# platform noise
+.DS_Store
+*.swp
+
+# what the android sample host needs locally
+/apps/android/local.properties

@@ -1,0 +1,57 @@
+name: VarnGUIRenderer
+
+options:
+  bundleIdPrefix: dev.varn.gui
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGN_IDENTITY: ""
+
+targets:
+  # The renderer is built as a framework so the tests import it the way a consuming app would.
+  VarnGUIRenderer:
+    type: framework
+    platform: iOS
+    sources:
+      - path: ..
+        excludes:
+          - tests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.varn.gui.renderer
+        GENERATE_INFOPLIST_FILE: YES
+
+  # The tests run inside an application, since UIKit dispatches a control's action through one.
+  VarnGUIRendererTestHost:
+    type: application
+    platform: iOS
+    sources:
+      - path: TestHost.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.varn.gui.renderer.host
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+
+  VarnGUIRendererTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: .
+        excludes:
+          - project.yml
+          - TestHost.swift
+    dependencies:
+      - target: VarnGUIRenderer
+      - target: VarnGUIRendererTestHost
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.varn.gui.renderer.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/VarnGUIRendererTestHost.app/VarnGUIRendererTestHost
+        BUNDLE_LOADER: $(TEST_HOST)
