@@ -95,6 +95,32 @@ local function agrees(suite, declared)
 end
 
 -- Every suite runs the same cases, so a case added on one side cannot be forgotten on the others.
+-- A batch is checked for what it carries as well as for what it names.
+--
+-- A field of the wrong type reaches every renderer as something it reads as nothing: a width that is a
+-- string is a node laid out at nowhere on three platforms rather than a failure named where it was made.
+do
+    local protocol = require("gui.bridge.protocol")
+
+    assert(protocol.validate({ { op = "frame", id = 1, x = 0, y = 0, width = 10, height = 10 } }) == nil,
+        "a frame made of numbers is a frame")
+
+    local wrong = protocol.validate({ { op = "frame", id = 1, x = 0, y = 0, width = "10", height = 10 } })
+
+    assert(wrong ~= nil and wrong:find("width", 1, true) ~= nil,
+        "a width that is not a number is refused, saying which field: " .. tostring(wrong))
+
+    local nothing = protocol.validate({ { op = "frame", id = 1, x = 0, y = 0, width = 0 / 0, height = 10 } })
+
+    assert(nothing ~= nil, "and so is one that is not a number at all")
+
+    local named = protocol.validate({ { op = "create", id = "one", type = "view" } })
+
+    assert(named ~= nil and named:find("id", 1, true) ~= nil,
+        "an id that is not a number is refused: " .. tostring(named))
+end
+
+
 do
     local async = require("async")
     local fs = require("fs")

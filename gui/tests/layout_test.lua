@@ -205,6 +205,20 @@ do
     box(frames, pinned, 10, 0, 80, 5)
 end
 
+-- A margin moves a pinned box off the edge it is pinned to.
+--
+-- That is how a box of a known size is centred on one: pinned at half the width and pulled back by half
+-- its own. Ignored, it sits with its leading edge on the middle instead, which is a round cover in the
+-- middle of a tab bar drawn over the tab beside it.
+do
+    local cover = node({ position = "absolute", left = "50%", marginLeft = -34, top = 0, width = 68, height = 68 })
+    local root = node({ width = 400, height = 100 }, { cover })
+
+    local frames = flex.compute(root, { width = 400, height = 100 })
+
+    box(frames, cover, 166, 0, 68, 68)
+end
+
 -- A leaf answers its own size through the measure the caller supplied.
 do
     local label = node({})
@@ -407,6 +421,332 @@ do
     local frames = flex.compute(root, { width = 300, height = 100 })
 
     near(frameOf(frames, half).width, 150, "a flowing percentage is worked out against the size it now has")
+end
+
+
+-- A child of a fixed width in a row is aligned by its height, never by that width.
+--
+-- Written as one `and`/`or` the cross size read the width whenever the child declared no height, so a
+-- table's fixed column sat above every row it belonged to by half the difference between the two.
+do
+    local frames = flex.compute({
+        style = { direction = "row", align = "center", width = 300, height = 44 },
+        children = {
+            { style = { grow = 1 }, measure = function() return { width = 40, height = 20 } end },
+            { style = { width = 64 }, measure = function() return { width = 30, height = 20 } end },
+        },
+    }, { width = 300, height = 44 })
+
+    local placed = {}
+
+    for node, frame in pairs(frames) do
+        placed[#placed + 1] = frame.y
+    end
+
+    for index = 1, #placed do
+        assert(placed[index] >= 0, "a row's child is never placed above the row, got y = " .. placed[index])
+    end
+end
+
+
+
+-- A child of a row that declares only a height is not that many points wide.
+--
+-- The same `and`/`or` that broke the cross size broke the main one: a row read the child's height
+-- whenever it declared no width, so a box forty points tall came out forty points wide.
+do
+    local frames = flex.compute({
+        style = { direction = "row", width = 300, height = 100 },
+        children = { { style = { height = 40 } }, { style = { width = 50, height = 10 } } },
+    }, { width = 300, height = 100 })
+
+    local widths = {}
+
+    for _, frame in pairs(frames) do
+        widths[#widths + 1] = frame.width
+    end
+
+    table.sort(widths)
+    assert(widths[1] == 0, "a child with no width of its own takes none, got " .. widths[1])
+    assert(widths[2] == 50, "and one that declares a width takes that, got " .. widths[2])
+end
+
+
+
+-- A tree laid out again and again answers what one laid out from nothing answers.
+--
+-- The engine keeps what a pass produced so a repeat of the same question is cheap, and a memo that
+-- answers a question the box was not last laid out for hands back a size while everything below it
+-- still holds what some other question produced: a row stretched to its container with text inside it
+-- that kept the width it would have had on its own. Sixty trees of random shape, each laid out at ten
+-- sizes that come back around, against a copy that has never been laid out at all. A size is asked for
+-- again after others have been, since what a box remembers is only worth anything the second time.
+do
+    math.randomseed(7)
+
+    local DIRECTIONS = { "row", "column", "row-reverse", "column-reverse" }
+    local JUSTIFY = { "start", "center", "end", "space-between", "space-around", "space-evenly" }
+    local ALIGN = { "start", "center", "end", "stretch" }
+    local SIZES = {
+        { 390, 844 }, { 844, 390 }, { 320, 640 }, { 390, 844 }, { 1024, 768 },
+        { 844, 390 }, { 512, 768 }, { 390, 844 }, { 1024, 768 }, { 320, 640 },
+    }
+
+    local function pick(list) return list[math.random(#list)] end
+
+    --- A tree as plain data, so the same shape can be built twice.
+    local function describe(depth)
+        local style = {
+            direction = pick(DIRECTIONS), justify = pick(JUSTIFY), align = pick(ALIGN),
+            gap = math.random(0, 12), padding = math.random(0, 10),
+        }
+
+        if math.random() < 0.4 then style.width = math.random(20, 200) end
+        if math.random() < 0.4 then style.height = math.random(20, 120) end
+        if math.random() < 0.3 then style.grow = 1 end
+        if math.random() < 0.2 then style.wrap = true end
+        if math.random() < 0.2 then style.position = "absolute" end
+
+        local spec = { style = style }
+
+        -- A box that scrolls gives its children all the room they ask for along that axis, so it asks
+        -- them something no other box asks, and a list is where this matters most.
+        if math.random() < 0.15 then
+            spec.scrolls = math.random() < 0.5 and "vertical" or "horizontal"
+        end
+
+        if depth == 0 or math.random() < 0.3 then
+            spec.natural = math.random(30, 140)
+            spec.line = math.random(12, 40)
+            return spec
+        end
+
+        spec.children = {}
+        for index = 1, math.random(1, 4) do spec.children[index] = describe(depth - 1) end
+        return spec
+    end
+
+    local function build(spec)
+        local node = { style = spec.style, scrolls = spec.scrolls }
+
+        if spec.children == nil then
+            node.measure = function(_, bound)
+                local width = bound ~= nil and math.min(spec.natural, bound) or spec.natural
+                return { width = width, height = spec.line * math.ceil(spec.natural / math.max(1, width)) }
+            end
+
+            return node
+        end
+
+        node.children = {}
+        for index = 1, #spec.children do node.children[index] = build(spec.children[index]) end
+        return node
+    end
+
+    local function shot(node, path, into)
+        local frame = flex.frameOf(node)
+
+        into[path] = frame ~= nil
+            and string.format("%.2f %.2f %.2f %.2f", frame.x, frame.y, frame.width, frame.height)
+            or "none"
+
+        for index = 1, #(node.children or {}) do
+            shot(node.children[index], path .. "." .. index, into)
+        end
+
+        return into
+    end
+
+    for trial = 1, 60 do
+        local spec = describe(5)
+        local kept = build(spec)
+
+        for _, size in ipairs(SIZES) do
+            flex.compute(kept, { width = size[1], height = size[2] })
+
+            local fresh = build(spec)
+            flex.compute(fresh, { width = size[1], height = size[2] })
+
+            local before = shot(kept, "0", {})
+            local after = shot(fresh, "0", {})
+
+            for path, value in pairs(after) do
+                assert(before[path] == value, "trial " .. trial .. " at " .. size[1] .. "x" .. size[2] ..
+                    ", node " .. path .. ": laid out again gave " .. tostring(before[path]) ..
+                    ", laid out from nothing gave " .. value)
+            end
+        end
+    end
+end
+
+-- What a box worked out is worth nothing once something under it has changed.
+--
+-- The trees above are laid out at several sizes and never touched, so nothing in them ever goes out of
+-- date. A screen is the other way round: it holds still and its contents change, and a box above the
+-- change keeps every answer it gave before it — the shape of a label growing and the row around it
+-- staying the width of the old one. Each tree here is laid out, one leaf is grown, and it is laid out
+-- again against a tree built with that leaf already grown.
+do
+    math.randomseed(11)
+
+    local DIRECTIONS = { "row", "column", "row-reverse", "column-reverse" }
+    local ALIGN = { "start", "center", "end", "stretch" }
+
+    local function pick(list) return list[math.random(#list)] end
+
+    local function describe(depth)
+        local spec = {
+            style = {
+                direction = pick(DIRECTIONS), align = pick(ALIGN),
+                gap = math.random(0, 8), padding = math.random(0, 8),
+            },
+        }
+
+        if depth == 0 or math.random() < 0.35 then
+            spec.natural = math.random(30, 120)
+            return spec
+        end
+
+        spec.children = {}
+        for index = 1, math.random(1, 3) do spec.children[index] = describe(depth - 1) end
+        return spec
+    end
+
+    local function measurer(natural)
+        return function(bound)
+            local width = bound ~= nil and math.min(natural, bound) or natural
+            return { width = width, height = 16 * math.ceil(natural / math.max(1, width)) }
+        end
+    end
+
+    local function build(spec)
+        local node = { style = spec.style, revision = 1 }
+
+        if spec.children == nil then
+            node.measure = measurer(spec.natural)
+            return node
+        end
+
+        node.children = {}
+        for index = 1, #spec.children do node.children[index] = build(spec.children[index]) end
+        return node
+    end
+
+    --- Answers the first leaf under a node, and the same one in a tree built from the same spec.
+    local function firstLeaf(node)
+        if node.children == nil then
+            return node
+        end
+
+        return firstLeaf(node.children[1])
+    end
+
+    local function firstLeafSpec(spec)
+        if spec.children == nil then
+            return spec
+        end
+
+        return firstLeafSpec(spec.children[1])
+    end
+
+    local function shot(node, path, into)
+        local frame = flex.frameOf(node)
+
+        into[path] = frame ~= nil
+            and string.format("%.2f %.2f %.2f %.2f", frame.x, frame.y, frame.width, frame.height)
+            or "none"
+
+        for index = 1, #(node.children or {}) do
+            shot(node.children[index], path .. "." .. index, into)
+        end
+
+        return into
+    end
+
+    for trial = 1, 120 do
+        local spec = describe(4)
+        local kept = build(spec)
+
+        -- Laid out at sizes that come back around, so every box above the leaf remembers more than one.
+        for _, size in ipairs({ { 300, 500 }, { 200, 400 }, { 300, 500 }, { 260, 460 } }) do
+            flex.compute(kept, { width = size[1], height = size[2] })
+        end
+
+        local grown = math.random(140, 260)
+
+        firstLeafSpec(spec).natural = grown
+
+        local leaf = firstLeaf(kept)
+        leaf.revision = 2
+        leaf.measure = measurer(grown)
+
+        flex.compute(kept, { width = 300, height = 500 })
+
+        local fresh = build(spec)
+        flex.compute(fresh, { width = 300, height = 500 })
+
+        local before = shot(kept, "0", {})
+        local after = shot(fresh, "0", {})
+
+        for path, value in pairs(after) do
+            assert(before[path] == value, "trial " .. trial .. ", node " .. path ..
+                ": a tree whose leaf grew gave " .. tostring(before[path]) ..
+                ", one built with it already grown gave " .. value)
+        end
+    end
+end
+
+
+-- A control the platform gave a size to keeps it, however much room it is offered.
+--
+-- A switch is fifty-one points across because that is what a switch is. Stretched down a tablet it is a
+-- control drawn in the corner of a box the whole width of the pane, with every point of that box
+-- answering a finger meant for the switch. A platform with no opinion about an axis answers nothing for
+-- it, and those still fill the room they are given.
+--
+-- The rule was written twice — once where a child is measured and once where it is placed — and the
+-- second copy did not know about it, so a control was left alone and then stretched anyway.
+do
+    local gui = require("gui")
+
+    local function laid(node)
+        local renderer = gui.headless()
+        local runtime = gui.start(gui.View { style = { grow = 1 }, node }, renderer,
+            { size = { width = 652, height = 768 }, platform = "ios" })
+
+        for _ = 1, 4 do
+            if not runtime:needsCommit() then
+                break
+            end
+
+            runtime:commit()
+        end
+
+        for _, found in pairs(renderer.nodes) do
+            if found.frame ~= nil and found.type ~= "view" then
+                local natural = renderer:measureControl(found.type)
+                runtime:stop()
+                return found.frame, natural
+            end
+        end
+    end
+
+    local switch, switchNatural = laid(gui.Switch { value = true })
+
+    assert(switchNatural.width > 0, "the platform must have an opinion about how wide a switch is")
+    assert(switch.width == switchNatural.width,
+        "a switch is as wide as the platform draws one, is " .. switch.width)
+
+    local stepper, stepperNatural = laid(gui.Stepper { value = 1 })
+
+    assert(stepper.width == stepperNatural.width,
+        "and so is a stepper, is " .. stepper.width)
+
+    -- A platform that answers nothing for an axis has no opinion about it, and those still fill.
+    local slider, sliderNatural = laid(gui.Slider { value = 0.5 })
+
+    assert(sliderNatural.width == 0, "the platform has no opinion about how wide a slider is")
+    assert(slider.width == 652, "so a slider fills the room it is given, is " .. slider.width)
 end
 
 print("gui.layout ok")

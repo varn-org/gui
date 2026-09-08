@@ -2,16 +2,7 @@ local support = require("gui.components.support")
 
 local M = {}
 
---- The families the reference is grouped under, in the order the page reads.
-local FAMILIES = {
-    { title = "Structure", module = "gui.components.structure" },
-    { title = "Content", module = "gui.components.content" },
-    { title = "Input", module = "gui.components.input" },
-    { title = "Collections", module = "gui.components.collections" },
-    { title = "Containers", module = "gui.components.containers" },
-    { title = "Presentation", module = "gui.components.presentation" },
-    { title = "Feedback", module = "gui.components.feedback" },
-}
+local FAMILIES = require("gui.components.families")
 
 local function sorted(values)
     local copy = {}

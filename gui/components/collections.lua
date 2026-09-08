@@ -14,7 +14,7 @@ M.List = support.component("List", {
     props = {
         "data", "renderItem", "itemType", "keyExtractor",
         "horizontal", "recycle", "itemExtent", "estimatedItemExtent",
-        "windowMargin", "initialCount", "endThreshold", "inverted", "contentInset",
+        "windowMargin", "initialCount", "endThreshold",
         "separator", "separatorExtent", "header", "headerExtent", "footer", "footerExtent", "empty",
         "showsIndicator", "scrollEnabled", "bounces", "paging", "refreshing", "keyboardDismissMode",
     },
@@ -26,7 +26,6 @@ M.List = support.component("List", {
         horizontal = false,
         recycle = true,
         windowMargin = 2,
-        inverted = false,
         showsIndicator = true,
         scrollEnabled = true,
         bounces = true,
@@ -121,6 +120,7 @@ M.Carousel = support.component("Carousel", {
         spacing = 0,
         recycle = true,
         indicator = true,
+        showsIndicator = false,
     },
     validate = function(spec)
         if type(spec.data) ~= "table" then

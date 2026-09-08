@@ -188,4 +188,56 @@ do
     assert(acted, "what to do about it reports when it is pressed")
 end
 
+-- A ground fades where it is and a panel travels, since they are two different moves.
+--
+-- Both were one node under one transition, so dismissing anything slid the darkness down with the panel
+-- and uncovered the screen from the top while the overlay was still on its way out.
+do
+    local Shown = gui.component({
+        name = "Shown",
+        state = { open = true },
+        render = function(self)
+            return gui.View { style = { grow = 1 },
+                gui.Sheet {
+                    visible = self.state.open,
+                    onDismiss = function() self:setState({ open = false }) end,
+                    gui.Text { text = "A sheet" },
+                },
+            }
+        end,
+    })
+
+    local _, renderer = start(Shown {})
+
+    local ground = nil
+    local travelling = nil
+
+    for _, node in pairs(renderer.nodes) do
+        local enter = node.props.enter
+
+        if enter ~= nil then
+            if enter.transform ~= nil then
+                travelling = node
+            else
+                ground = node
+            end
+        end
+    end
+
+    assert(ground ~= nil, "the ground behind a sheet must arrive")
+    assert(ground.props.enter.opacity == 0, "and it arrives by fading, since it has nowhere to travel to")
+    assert(ground.props.enter.transform == nil, "a ground that travels drags the screen out from under it")
+
+    assert(travelling ~= nil, "the panel must arrive by travelling")
+    assert(travelling.props.enter.transform.translateY == "100%",
+        "a panel anchored to an edge travels the whole of its own height, travels "
+            .. tostring(travelling.props.enter.transform.translateY))
+
+    -- A travel written as a share of the node is a share of the panel, so the panel is the node that
+    -- carries it rather than a screen-sized sheet of glass with the panel somewhere inside.
+    assert(travelling.frame.height < 844,
+        "the travelling node is the panel, is " .. travelling.frame.height .. " tall")
+    assert(ground.frame.height == 844, "and the ground is what covers the screen")
+end
+
 print("gui.presentation ok")

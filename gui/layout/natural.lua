@@ -10,6 +10,15 @@ local declared = {}
 --- given. A type that stands this in for its size is measured rather than assumed.
 M.platform = setmetatable({}, { __tostring = function() return "platform" end })
 
+--- The same, for a control the platform draws more than one way, which the variant names.
+---
+--- A wheel picker and a compact one are different controls to lay out, and the size of either is the
+--- platform's to answer. Asking about the type alone gets the answer for whichever one it makes by
+--- default, so a wheel was given a height written here and stretched to whatever width was going.
+function M.variant(name)
+    return setmetatable({ variant = name }, { __tostring = function() return "platform/" .. name end })
+end
+
 --- Records the natural size of a type, which is what a component declares once and every screen reads.
 ---
 --- A node with no children, no text and no size would otherwise be nothing. A switch is the size the
@@ -52,13 +61,19 @@ function M.sizeOf(kind, props, measureControl)
 
     local size = natural.size
 
-    if size == M.platform then
-        size = measureControl ~= nil and measureControl(kind) or nil
-    elseif type(size) == "function" then
+    if type(size) == "function" then
         size = size(props)
     end
 
-    if size == nil and natural.padding == nil then
+    -- A type whose size depends on how it was asked for answers the sentinel from its own function, so
+    -- what the platform draws is asked for after the type has had its say rather than before.
+    if size == M.platform then
+        size = measureControl ~= nil and measureControl(kind) or nil
+    elseif type(size) == "table" and size.variant ~= nil then
+        size = measureControl ~= nil and measureControl(kind, size.variant) or nil
+    end
+
+    if size == nil and natural.padding == nil and natural.minWidth == nil and natural.minHeight == nil then
         return nil
     end
 
@@ -72,7 +87,7 @@ function M.sizeOf(kind, props, measureControl)
 end
 
 --- The types that scroll, and so are a viewport rather than a box the size of what is inside them.
-local SCROLLING = {
+M.scrolling = {
     scroll = true,
     list = true,
     sectionlist = true,
@@ -85,7 +100,7 @@ local SCROLLING = {
 --- A scrolling view is as large as it was given room to be, never as large as what is inside it. That
 --- is what scrolling means, and a view that grew to its content would push everything around it out.
 function M.scrollAxisOf(kind, props)
-    if not SCROLLING[kind] then
+    if not M.scrolling[kind] then
         return nil
     end
 

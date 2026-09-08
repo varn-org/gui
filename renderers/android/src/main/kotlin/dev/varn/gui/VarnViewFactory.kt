@@ -1,15 +1,28 @@
 package dev.varn.gui
 
+import android.annotation.SuppressLint
+import android.app.AlertDialog
 import android.content.Context
+import android.text.Editable
+import android.text.TextWatcher
+import android.graphics.Color
+import android.graphics.Rect
+import android.media.MediaPlayer
+import android.view.MotionEvent
+import android.view.TouchDelegate
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.webkit.WebView
 import android.widget.*
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 
 /** Builds the Android view that stands for one node type. */
 object VarnViewFactory {
     fun make(context: Context, type: String): View = when (type) {
-        "text", "richtext", "badge", "chip", "icon", "tooltip", "avatar" -> TextView(context)
+        "text", "richtext", "badge", "tooltip" -> TextView(context)
         "image" -> ImageView(context)
         // A button carries no look of its own, since the style a commit carries is what paints it.
         "button" -> Button(context).apply {
@@ -20,8 +33,8 @@ object VarnViewFactory {
             stateListAnimator = null
             setPadding(0, 0, 0, 0)
         }
-        "textinput", "searchbar" -> EditText(context)
-        "textarea" -> EditText(context).apply { isSingleLine = false; minLines = 3 }
+        "textinput", "searchbar" -> VarnTextField(context)
+        "textarea" -> VarnTextField(context).apply { isSingleLine = false; minLines = 3 }
         // One scrolling surface serves every scrolling type, since the engine sends all of them the same thing.
         "scroll", "list", "sectionlist", "grid", "carousel" -> VarnCollectionView(context)
         "switch" -> Switch(context)
@@ -37,11 +50,16 @@ object VarnViewFactory {
         "segmented" -> VarnSegmentedView(context)
         // A radio group holds the radios the engine placed, so it is a box rather than a linear layout.
         "stepper" -> VarnStepperView(context)
-        "filepicker" -> Button(context)
-        "colorpicker", "refresh" -> View(context)
+        "filepicker" -> VarnFilePicker(context)
+        "colorpicker" -> VarnColorView(context)
         "webview" -> WebView(context)
-        "video" -> VideoView(context)
+        "video" -> VarnVideoView(context)
+        "audio" -> VarnAudioView(context)
         "canvas" -> VarnCanvasView(context)
+        "gradient" -> VarnGradientView(context)
+        "blur" -> VarnBlurView(context)
+        "map" -> VarnMapView(context)
+        "location" -> VarnLocationView(context)
         "divider" -> View(context)
 
         // A box is what the rest are: the engine positions them and their style paints them.
@@ -59,12 +77,213 @@ object VarnViewFactory {
 }
 
 /**
+ * How far a finger has gone since it landed, which is what a swipe is and a press is not.
+ *
+ * The distance is measured against the screen rather than against the view, since a view inside a list
+ * moves under a finger that has not moved at all. It is the distance a page is dragged by rather than
+ * the one a touch wanders by, because a finger on a phone is never still and a press held to that
+ * shorter one is a control a reader has to press three times to be heard once.
+ */
+class VarnPressTravel(context: Context) {
+    private val slop = ViewConfiguration.get(context).scaledPagingTouchSlop
+    private var at: Pair<Float, Float>? = null
+
+    val landed: Boolean
+        get() = at != null
+
+    fun began(event: MotionEvent) {
+        at = event.rawX to event.rawY
+    }
+
+    fun ended() {
+        at = null
+    }
+
+    fun swept(event: MotionEvent): Boolean {
+        val landed = at ?: return false
+
+        return abs(event.rawX - landed.first) > slop || abs(event.rawY - landed.second) > slop
+    }
+
+    fun directionOf(event: MotionEvent): String {
+        val landed = at ?: return "right"
+        val across = event.rawX - landed.first
+        val down = event.rawY - landed.second
+
+        if (abs(across) >= abs(down)) {
+            return if (across < 0) "left" else "right"
+        }
+
+        return if (down < 0) "up" else "down"
+    }
+}
+
+/**
+ * A field that remembers what it has told the tree since it was last written to.
+ *
+ * A tree answers a keystroke with the value it has just been told, and by the time that lands the
+ * reader has typed two more: writing it back puts the field where it was and everything typed since is
+ * gone. What the field itself said is not news, and anything it never said is a real change.
+ */
+class VarnTextField(context: Context) : EditText(context) {
+    private val said = LinkedHashSet<String>()
+
+    /**
+     * Told what was typed, by the one watcher this field ever has.
+     *
+     * A watcher is added rather than set, so binding the handler again — which a prop that comes and
+     * goes does — left the field reporting every keystroke once per binding.
+     */
+    var onTyped: ((String) -> Unit)? = null
+
+    init {
+        addTextChangedListener(object : TextWatcher {
+            override fun afterTextChanged(text: Editable) {
+                reported(text.toString())
+                onTyped?.invoke(text.toString())
+            }
+
+            override fun beforeTextChanged(text: CharSequence, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(text: CharSequence, start: Int, before: Int, count: Int) = Unit
+        })
+    }
+
+    fun reported(text: String) {
+        said += text
+
+        while (said.size > SAID) {
+            said.remove(said.first())
+        }
+    }
+
+    fun echoed(text: String) = said.contains(text)
+
+    fun written() {
+        said.clear()
+    }
+
+    private companion object {
+        const val SAID = 64
+    }
+}
+
+/**
  * The plain box everything else is built from.
  *
  * The engine sends finished frames, so this never measures or arranges anything: a child is placed
  * exactly where it was told to go.
  */
 open class VarnBoxView(context: Context) : ViewGroup(context) {
+    /**
+     * The range the surface holds this box against its leading edge over, which a header is given.
+     *
+     * A header placed from the tree follows a finger a commit late, which is a header drifting over the
+     * rows it is meant to cover. The range is what the tree knows and the offset is what the surface
+     * knows, so each says the part it has.
+     */
+    var pinned: Pair<Float, Float>? = null
+
+    /** Answers where it sits for an offset, which is against the edge until its range runs out. */
+    fun held(offset: Float, extent: Int): Float {
+        val range = pinned ?: return offset
+
+        return min(max(offset, range.first), max(range.first, range.second - extent))
+    }
+
+    /** How far outside its own box this one answers a finger, which is what a small control needs. */
+    var slop: Int = 0
+        set(value) {
+            field = value
+            (parent as? VarnBoxView)?.refreshSlop()
+        }
+
+    /** Told when a finger lands on this box and when it leaves, which a press reports both edges of. */
+    var onPressIn: (() -> Unit)? = null
+    var onPressOut: (() -> Unit)? = null
+
+    /** Told the way a finger went when it went far enough to be a swipe rather than a press. */
+    var onSwipe: ((String) -> Unit)? = null
+
+    /**
+     * Whether a finger passes through this box and everything inside it.
+     *
+     * Refusing to dispatch is what makes it pass through: the platform carries on to the next sibling,
+     * which is what the other two renderers do for the same prop. Disabling the box alone left every
+     * control inside it answering a finger that should never have reached it.
+     */
+    var passesThrough = false
+
+    private var reaching: VarnSlopDelegate? = null
+    private val travel = VarnPressTravel(context)
+    private var swept: String? = null
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (passesThrough) {
+            return false
+        }
+
+        return super.dispatchTouchEvent(event)
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        // A box nothing is listening to answers a finger the way any other box does, which is not at all.
+        if (!isClickable) {
+            return super.onTouchEvent(event)
+        }
+
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                travel.began(event)
+                alpha = 0.55f
+                onPressIn?.invoke()
+            }
+
+            // A swipe across a row is the row being swiped rather than pressed, and nothing else takes
+            // a press away: a view gives one up when the touch leaves its bounds, and the surface takes
+            // the whole gesture when it turns into a scroll.
+            MotionEvent.ACTION_MOVE -> {
+                if (onSwipe != null && travel.swept(event)) {
+                    swept = travel.directionOf(event)
+                    release()
+
+                    val cancelled = MotionEvent.obtain(event)
+                    cancelled.action = MotionEvent.ACTION_CANCEL
+                    super.onTouchEvent(cancelled)
+                    cancelled.recycle()
+
+                    return false
+                }
+            }
+
+            MotionEvent.ACTION_UP -> {
+                release()
+
+                swept?.let { onSwipe?.invoke(it) }
+                swept = null
+            }
+
+            MotionEvent.ACTION_CANCEL -> {
+                release()
+                swept = null
+            }
+        }
+
+        return super.onTouchEvent(event)
+    }
+
+    /** Ends the press once, wherever it ended, so a finger is never reported as having left twice. */
+    private fun release() {
+        if (!travel.landed) {
+            return
+        }
+
+        travel.ended()
+        animate().alpha(1f).setDuration(220).start()
+        onPressOut?.invoke()
+    }
+
+    /** Answers the way a finger went, which is whichever axis it went furthest along. */
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         for (index in 0 until childCount) {
             val child = getChildAt(index)
@@ -72,6 +291,37 @@ open class VarnBoxView(context: Context) : ViewGroup(context) {
 
             child.layout(child.left, child.top, child.left + params.width, child.top + params.height)
         }
+
+        refreshSlop()
+    }
+
+    /**
+     * Tells this box which of its children answer a finger from outside their own bounds.
+     *
+     * A view only ever receives a touch inside itself, and the platform's answer to that is a delegate
+     * on the view above it. A view holds one delegate, so one holds every child that asked for slop.
+     */
+    private fun refreshSlop() {
+        val reaches = (0 until childCount)
+            .map { getChildAt(it) }
+            .filterIsInstance<VarnBoxView>()
+            .filter { it.slop > 0 }
+
+        if (reaches.isEmpty()) {
+            if (reaching != null) {
+                touchDelegate = null
+                reaching = null
+            }
+
+            return
+        }
+
+        val delegate = reaching ?: VarnSlopDelegate(this).also {
+            reaching = it
+            touchDelegate = it
+        }
+
+        delegate.hold(reaches)
     }
 
     override fun onMeasure(widthSpec: Int, heightSpec: Int) {
@@ -88,6 +338,144 @@ open class VarnBoxView(context: Context) : ViewGroup(context) {
                 MeasureSpec.makeMeasureSpec(params.width, MeasureSpec.EXACTLY),
                 MeasureSpec.makeMeasureSpec(params.height, MeasureSpec.EXACTLY),
             )
+        }
+    }
+}
+
+/**
+ * A swatch showing the colour that was chosen, which opens the three sliders that choose another.
+ *
+ * Android ships no colour picker of its own, so this is the whole of one: a box in the current colour
+ * and a dialog behind it. What it answers is the eight hex digits every renderer reads a colour as, so
+ * the three platforms report the same thing for the same gesture.
+ */
+class VarnColorView(context: Context) : View(context) {
+    var onChoose: ((String) -> Unit)? = null
+
+    var color: Int = Color.BLACK
+        set(value) {
+            field = value
+            setBackgroundColor(value)
+        }
+
+    init {
+        setBackgroundColor(color)
+        isClickable = true
+        setOnClickListener { open() }
+    }
+
+    private fun open() {
+        val holder = LinearLayout(context)
+        holder.orientation = LinearLayout.VERTICAL
+        holder.setPadding(48, 32, 48, 8)
+
+        val parts = intArrayOf(Color.red(color), Color.green(color), Color.blue(color))
+        val bars = List(parts.size) { at ->
+            SeekBar(context).apply {
+                max = 255
+                progress = parts[at]
+                holder.addView(this)
+            }
+        }
+
+        AlertDialog.Builder(context)
+            .setTitle("Colour")
+            .setView(holder)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                color = Color.rgb(bars[0].progress, bars[1].progress, bars[2].progress)
+                onChoose?.invoke(String.format("#%06xff", color and 0xffffff))
+            }
+            .show()
+    }
+}
+
+/**
+ * Hands a box the touches that land just outside the children that asked to answer them.
+ *
+ * The platform's own delegate carries one view, and a box holds many, so this stands in for all of
+ * them. Only a touch outside a child's own bounds is claimed, since one inside already reaches it.
+ */
+class VarnSlopDelegate(private val host: VarnBoxView) : TouchDelegate(Rect(), host) {
+    private var reaches: List<VarnBoxView> = emptyList()
+    private var receiving: View? = null
+
+    fun hold(views: List<VarnBoxView>) {
+        reaches = views
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        val x = event.x.toInt()
+        val y = event.y.toInt()
+
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            receiving = reaching(x, y)
+        }
+
+        val target = receiving ?: return false
+
+        if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+            receiving = null
+        }
+
+        val moved = MotionEvent.obtain(event)
+        moved.setLocation((x - target.left).toFloat(), (y - target.top).toFloat())
+
+        val handled = target.dispatchTouchEvent(moved)
+        moved.recycle()
+
+        return handled
+    }
+
+    private fun reaching(x: Int, y: Int): View? = reaches.firstOrNull {
+        it.visibility == View.VISIBLE
+            && !Rect(it.left, it.top, it.right, it.bottom).contains(x, y)
+            && Rect(it.left - it.slop, it.top - it.slop, it.right + it.slop, it.bottom + it.slop).contains(x, y)
+    }
+}
+
+/**
+ * Plays what it was given, holding what it was told until the player is ready to be told it.
+ *
+ * A player answers none of this before it is prepared, and it reports being prepared to one listener,
+ * so every one of these setting its own left whichever arrived last replacing the rest.
+ */
+class VarnVideoView(context: Context) : VideoView(context), VarnReleasing {
+    var muted: Boolean = false
+        set(value) { field = value; settle() }
+
+    var volume: Float = 1f
+        set(value) { field = value; settle() }
+
+    var looping: Boolean = false
+        set(value) { field = value; settle() }
+
+    var rate: Float = 1f
+        set(value) { field = value; settle() }
+
+    private var player: MediaPlayer? = null
+
+    init {
+        setOnPreparedListener {
+            player = it
+            settle()
+        }
+    }
+
+    override fun release() {
+        stopPlayback()
+        player = null
+    }
+
+    private fun settle() {
+        val ready = player ?: return
+        val level = if (muted) 0f else volume
+
+        ready.setVolume(level, level)
+        ready.isLooping = looping
+
+        if (rate > 0f) {
+            ready.playbackParams = ready.playbackParams.setSpeed(rate)
         }
     }
 }

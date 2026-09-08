@@ -1,3 +1,5 @@
+local color = require("gui.style.color")
+
 local M = {}
 
 local cache = setmetatable({}, { __mode = "k" })
@@ -25,8 +27,7 @@ local TOKENS = {
     margin = "space", marginTop = "space", marginRight = "space", marginBottom = "space", marginLeft = "space",
     marginHorizontal = "space", marginVertical = "space",
     gap = "space", rowGap = "space", columnGap = "space",
-    radius = "radius", radiusTopLeft = "radius", radiusTopRight = "radius",
-    radiusBottomLeft = "radius", radiusBottomRight = "radius",
+    radius = "radius",
     fontSize = "fontSize",
     color = "color", background = "color", borderColor = "color", tint = "color", placeholderColor = "color",
     shadow = "shadow",
@@ -35,7 +36,7 @@ local TOKENS = {
 local TRANSFORMS = {
     translateX = 0, translateY = 0,
     scale = 1, scaleX = 1, scaleY = 1,
-    rotate = 0, skewX = 0, skewY = 0,
+    rotate = 0,
 }
 
 --- Normalises a transform into the fields every renderer applies, leaving layout untouched.
@@ -72,9 +73,36 @@ local function resolveTransform(style)
     return style
 end
 
+--- Answers a colour as the eight digit hex every renderer draws with.
+---
+--- A renderer reads a colour rather than parsing one, so a name from the theme, an `rgb` call and a
+--- three digit hex all arrive in the one shape and three platforms cannot disagree about any of them.
+function M.paint(value, theme)
+    if value == nil then
+        return nil
+    end
+
+    return color.toHex(theme:color(value))
+end
+
+local function paintShadow(declared, theme)
+    local painted = {}
+
+    for key, value in pairs(declared) do
+        painted[key] = value
+    end
+
+    painted.color = M.paint(declared.color, theme)
+    return painted
+end
+
 local function resolveTokens(style, theme)
     if type(style.shadow) == "string" then
         style.shadow = theme:shadow(style.shadow)
+    end
+
+    if type(style.shadow) == "table" then
+        style.shadow = paintShadow(style.shadow, theme)
     end
 
     for key, kind in pairs(TOKENS) do
@@ -87,7 +115,7 @@ local function resolveTokens(style, theme)
             elseif kind == "fontSize" then
                 style[key] = theme:fontSize(value)
             elseif kind == "color" then
-                style[key] = theme:color(value)
+                style[key] = M.paint(value, theme)
             end
         end
     end

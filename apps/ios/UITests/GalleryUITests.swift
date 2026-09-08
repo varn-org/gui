@@ -48,10 +48,11 @@ final class GalleryUITests: XCTestCase {
         XCTAssertTrue(row.exists, "the index must list what there is to see")
 
         row.tap()
-        XCTAssertTrue(text("One line").waitForExistence(timeout: 8), "pressing a row must open what it names")
+        XCTAssertTrue(text("Your name").waitForExistence(timeout: 8), "pressing a row must open what it names")
 
-        element("Back").tap()
-        XCTAssertTrue(text("Varn GUI").waitForExistence(timeout: 8), "the way back must bring the index with it")
+        // The way back carries the title of the screen behind it, which is what iOS draws on it.
+        element("Varn GUI").tap()
+        XCTAssertTrue(element("Toggles and choices", 8).exists, "the way back must bring the index with it")
     }
 
     func testTypingIntoAFieldReachesTheTree() {
@@ -196,37 +197,190 @@ final class GalleryUITests: XCTestCase {
                       "the item that was pressed must reach the tree")
     }
 
-    func testEveryScreenOpensAndComesBack() {
+    /// A row on the index opens the screen it names and gives it back, wherever the row sits.
+    ///
+    /// Which demos there are is the catalogue's to say, and `gui/tests/sample_test.lua` renders every
+    /// one of them, so this is here for the round trip rather than for the list: a screen that opens
+    /// from a finger and a way back that leaves the index where the reader left it.
+    func testTheIndexOpensARowAndGivesItBack() {
         launch()
 
-        let demos = [
-            "Text fields", "Toggles and choices", "Sliders and steppers", "Pickers", "Buttons",
-            "Text", "Images and icons", "Video and web", "Canvas",
-            "A simple list", "Sections", "Grid", "Carousel", "Fifty thousand rows", "Table",
-            "Rows, columns and wrapping", "Placing and spacing", "Safe area and keyboard", "Scrolling",
-            "Progress and waiting", "Badges, chips and cards",
-            "Modals, sheets and alerts", "Menus and drawers", "Accordion, tabs and a stack",
-            "A form", "A request",
-        ]
+        let list = app.scrollViews.firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 8), "the index must be a list")
 
-        for name in demos {
-            // Going back brings the index with it at the top, so a row further down is scrolled to again.
-            var row = element(name, 2)
-            var swipes = 0
+        element("Text fields").tap()
+        XCTAssertTrue(element("Varn GUI", 8).exists, "a screen opened from the index carries a way back")
 
-            while !row.exists && swipes < 8 {
-                app.swipeUp()
-                swipes += 1
-                row = element(name, 1)
-            }
+        element("Varn GUI").tap()
+        XCTAssertTrue(element("Text fields", 8).exists, "and the index comes back with it")
 
-            XCTAssertTrue(row.exists, "\(name) must be listed on the index")
+        var further = element("Maps", 1)
+        var swipes = 0
 
-            row.tap()
-            XCTAssertTrue(element("Back", 8).exists, "\(name) must open with a way back")
-
-            element("Back").tap()
-            XCTAssertTrue(text("Varn GUI").waitForExistence(timeout: 8), "\(name) must let go of the screen")
+        while !further.exists && swipes < 8 {
+            list.swipeUp()
+            swipes += 1
+            further = element("Maps", 1)
         }
+
+        XCTAssertTrue(further.exists, "a row further down the index is reachable")
+
+        further.tap()
+        XCTAssertTrue(element("Varn GUI", 8).exists, "and opens the same way")
+
+        element("Varn GUI").tap()
+        XCTAssertTrue(element("Maps", 8).exists, "leaving the index where it was left")
+    }
+    /// A list that has been taken to its end still scrolls, in both directions.
+    ///
+    /// Reaching the last row and finding the surface dead is a list that answers no finger at all, and
+    /// no case that sends a scroll event can see it: the offset it sends is one the engine chose.
+    func testAListThatReachedItsEndStillScrolls() {
+        launch("lists/long")
+
+        let list = app.scrollViews.firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 8), "the demo must carry a list")
+
+        for _ in 0 ..< 25 {
+            list.swipeUp(velocity: .fast)
+        }
+
+        let atEnd = app.staticTexts.allElementsBoundByIndex.compactMap { $0.exists ? $0.label : nil }
+        XCTAssertFalse(atEnd.isEmpty, "the end of the list must still be showing rows")
+
+        for _ in 0 ..< 6 {
+            list.swipeDown(velocity: .fast)
+        }
+
+        let afterwards = app.staticTexts.allElementsBoundByIndex.compactMap { $0.exists ? $0.label : nil }
+        XCTAssertNotEqual(atEnd, afterwards, "a list taken to its end must scroll back off it")
+    }
+
+    /// A header that sticks stays where a header sticks, whatever the finger is doing.
+    func testASectionHeaderStaysAtTheTopWhileTheListMoves() {
+        launch("lists/sections")
+
+        let list = app.scrollViews.firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 8), "the demo must carry a list")
+
+        let header = app.staticTexts["Berries"]
+        XCTAssertTrue(header.waitForExistence(timeout: 8), "the first group must be named")
+
+        list.swipeUp(velocity: .fast)
+
+        let pinned = app.staticTexts.matching(NSPredicate(format: "label IN %@", ["Berries", "Citrus", "The rest"]))
+            .allElementsBoundByIndex
+            .filter { $0.exists }
+
+        XCTAssertFalse(pinned.isEmpty, "a group header is on screen wherever the list is")
+        XCTAssertTrue(pinned.contains { $0.frame.minY <= list.frame.minY + 48 },
+                      "and the one whose group is showing is against the top of the list")
+    }
+
+    /// The first screen is a list too, and every one of its rows is something that can be pressed.
+    ///
+    /// A scroll view will not cancel a touch that landed on a control, so a finger that landed on a row
+    /// scrolled nothing at all: the list answered the first flick and then sat there.
+    func testTheIndexScrollsBackFromItsEnd() {
+        launch()
+
+        let list = app.scrollViews.firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 8), "the index must be a list")
+        XCTAssertTrue(element("Text fields").exists, "the index must name what it holds")
+
+        for _ in 0 ..< 12 {
+            list.swipeUp(velocity: .fast)
+        }
+
+        XCTAssertFalse(element("Text fields", 1).exists, "the index must scroll off its first row")
+
+        for _ in 0 ..< 20 {
+            list.swipeDown(velocity: .fast)
+        }
+
+        XCTAssertTrue(element("Text fields", 4).exists, "and come back when it is pulled the other way")
+    }
+
+    /// The picture on a tab bar can be pressed, and choosing one says nothing a reader has to live with.
+    ///
+    /// The cover is drawn half above the bar it belongs to, and a view answers a touch only within its
+    /// own bounds, so nothing above that edge ever reached it: the control was seen and could not be
+    /// pressed. What went wrong behind it was drawn into the screen as a label that never went away.
+    func testTheCoverOnATabBarOpensTheLibraryAndLeavesNothingBehind() {
+        launch("tabs/cover")
+
+        let pick = element("Pick")
+        XCTAssertTrue(pick.waitForExistence(timeout: 8), "the cover offers a way to choose a picture")
+
+        pick.tap()
+        sleep(3)
+
+        // The library belongs to another process, so what proves it opened is that the gallery is no
+        // longer the thing on screen.
+        XCTAssertFalse(element("Home", 2).isHittable, "the system's own library is what a press opens")
+
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.09, dy: 0.115)).tap()
+        sleep(2)
+
+        let said = app.staticTexts.allElementsBoundByIndex.map { $0.label }.joined(separator: " | ")
+
+        XCTAssertFalse(said.lowercased().contains("could not"), "nothing about a failure is left behind: \(said)")
+        XCTAssertFalse(said.lowercased().contains("no prop named"), "and the screen still draws: \(said)")
+    }
+
+    /// The chat opens a conversation, answers what is written into it, and looks like the screen it is.
+    func testTheChatAnswersWhatIsWrittenIntoIt() {
+        launch("apps/chat")
+
+        let row = element("Daniel William")
+        XCTAssertTrue(row.waitForExistence(timeout: 8), "the inbox lists its conversations")
+
+        row.tap()
+        XCTAssertTrue(text("Hey Daniel").waitForExistence(timeout: 8), "opening one shows what was said")
+        XCTAssertTrue(text("Let me know if you need help").exists, "and everything else in it")
+
+        let field = app.textFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 4), "and offers somewhere to write")
+
+        field.tap()
+        field.typeText("Are you there")
+        element("Send").tap()
+
+        XCTAssertTrue(text("Are you there").waitForExistence(timeout: 6), "what was written is on screen")
+
+        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        shot.lifetime = .keepAlways
+        shot.name = "conversation"
+        add(shot)
+
+        // The other side answers a moment later, which is what makes it read as a conversation.
+        sleep(3)
+
+        let replies = app.staticTexts.allElementsBoundByIndex.map { $0.label }.joined(separator: " | ")
+
+        XCTAssertTrue(replies.contains("Of course") || replies.contains("Sending") || replies.contains("Done"),
+                      "and the other side answers: \(replies)")
+    }
+
+    /// Leaving a screen is a move a reader watches, the same as arriving is.
+    ///
+    /// A screen that is cut rather than drawn going reads as one that crashed, and nothing that sends a
+    /// commit can see the difference: the tree is the same either way, and what tells them apart is
+    /// what is on the glass a fraction of a second after the finger lifts.
+    func testAScreenIsSeenLeaving() {
+        launch()
+
+        element("Text fields").tap()
+        XCTAssertTrue(text("Your name").waitForExistence(timeout: 8), "the screen opened")
+
+        element("Varn GUI").tap()
+
+        // Straight after the press, both screens are on the glass: the one going and the one behind it.
+        let mid = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        mid.lifetime = .keepAlways
+        mid.name = "leaving"
+        add(mid)
+
+        XCTAssertTrue(element("Text fields", 8).exists, "and the index is back once the move is over")
     }
 }

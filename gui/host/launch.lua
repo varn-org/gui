@@ -1,6 +1,8 @@
 local async = require("async")
 local bundle = require("gui.assets.bundle")
+local pictures = require("gui.assets.pictures")
 local bridge = require("gui.host.bridge")
+local storage = require("gui.host.storage")
 local crypto = require("crypto")
 local element = require("gui.element")
 local fs = require("fs")
@@ -34,9 +36,12 @@ end
 --- only Lua the host has to know about.
 function M.run(path, options)
     options = options or {}
+    local held = nil
 
     local project = options.directory and bundle.openDirectory(path) or bundle.open(path, options.cache)
     local entry = project:entry()
+
+    storage.use(project.root .. "/files")
 
     package.path = project.root .. "/?.lua;" .. project.root .. "/?/init.lua;" .. package.path
 
@@ -47,12 +52,23 @@ function M.run(path, options)
 
     local application = describe(entry, chunk())
 
+    -- A picture from somewhere else is kept beside the archive it was asked for by, so it is fetched
+    -- once and is there the next time the application opens.
+    local store = pictures.create(project.root .. "/pictures", function(url, ok)
+        if held ~= nil then
+            held:invalidatePictures(url, ok)
+        end
+    end)
+
     local runtime = bridge.run(application, {
         fonts = project:fonts(),
         theme = options.theme,
         assets = project,
+        pictures = store,
         onProblem = options.onProblem,
     })
+
+    held = runtime
 
     runtime.bundle = project
     return runtime

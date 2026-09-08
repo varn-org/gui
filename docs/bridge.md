@@ -42,6 +42,30 @@ A prop a component declares is a prop something reads. `gui/tests/promises_test.
 
 A prop reaching a renderer is already resolved: spacing and radii are numbers, colours are literal, and a frame is in points. A renderer carries no theme and no layout of its own.
 
+### A change that takes time
+
+A node may carry a `transition` and an `enter`, and a renderer that has them drives the change with the platform's own animator rather than applying it at once.
+
+| Prop | Carries | What a renderer does |
+|---|---|---|
+| `transition` | `duration` and `delay` in milliseconds, `easing` as four control points | Drives every later style change over that time. The four numbers are what `cubic-bezier`, `UIViewPropertyAnimator` and `PathInterpolator` each take, so no renderer interprets a name. |
+| `enter` | A resolved style | Applied when the node is created, then the real style is animated to on the next frame. |
+
+Only opacity and the transform are animated. Neither disturbs the frames the engine sent, so a node keeps its layout however it is faded, slid or scaled. Both props are applied before any other, since a style arriving first would be applied instantly.
+
+### What the platform reports back
+
+| Prop or event | What a renderer does |
+|---|---|
+| `refreshing` | Shows the platform's own pull to refresh spinning, on the surface that owns the scrolling gesture. |
+| `onRefresh` | Reports once when the surface is pulled past the platform's threshold and let go. |
+| `onScrollEnd` | Reports when scrolling settles, which is the finger lifting without a throw or the throw running out. |
+| `onFocus`, `onBlur` | Report both edges of focus. A platform holding one focus listener reports both through it rather than binding each separately, or whichever was applied last replaces the other. |
+| `onSubmit` | Reports the return key. Unless `returnKey` is `next`, pressing it also takes the keyboard away. |
+| `keyboardDismissMode` | `on-drag` takes the keyboard away when the surface is dragged. |
+
+A host also takes the keyboard away when a press lands outside what is being typed into, and reports the platform's own way back — a swipe from the leading edge, or the back key — as `gui.back`.
+
 ### A control the platform has none of
 
 `segments`, `options` and `count` build what a control holds, and a platform without a control for one of them builds it out of parts of its own — a row of buttons for a segmented control, a menu for a chooser, a row of stars for a rating, two buttons and a readout for a stepper. The engine sends these types no children, so what is inside one belongs to the renderer the way a `UISegmentedControl`'s segments belong to UIKit.
@@ -83,8 +107,12 @@ The name is the prop, so a node with `onPress` receives `onPress`. A renderer ne
 | `gui.keyboard` | `height` | Every `KeyboardAvoiding` leaves that much clear |
 | `gui.appearance` | `appearance`, which is `"light"` or `"dark"` | Re-themes the tree, unless the application chose a theme of its own |
 | `gui.fontsRegistered` | Nothing | Drops the measurement cache |
+| `gui.back` | Nothing | The innermost thing on screen offering a way back takes it |
+| `gui.stop` | Nothing | The tree comes down: every screen hears it is going, every timer a screen asked for ends, and everything a node opened is given back |
 
-`host.gui_surface()` answers the same things at start — `width`, `height`, `scale`, `appearance` and `safeArea` — so an application is themed and inset correctly on its first frame rather than after one repaint. Light and dark come from the platform, so an application carries no switch of its own for something the reader already set on their device.
+A host sends `gui.stop` when it is finished with the surface. Stopping the loop alone leaves every screen mounted, every timer a screen asked for firing and everything a node opened still open, on an interface nobody is looking at.
+
+`host.gui_surface()` answers the same things at start — `platform`, `width`, `height`, `scale`, `appearance` and `safeArea` — so an application is themed and inset correctly on its first frame rather than after one repaint. Light and dark come from the platform, so an application carries no switch of its own for something the reader already set on their device.
 
 ## What crosses back
 
@@ -114,11 +142,13 @@ A renderer declares what it can do at start, so a component that needs a native 
 host.gui_capabilities() → { text = true, video = false, … }
 ```
 
-The names are in `gui/bridge/conformance.lua`.
+The names are in `gui/bridge/conformance.lua`. Two of them say what a renderer wants handed to it rather than what it can do: `fontBytes` and `imageBytes` mean it shares no filesystem with the engine, so a font and a picture arrive as bytes instead of as a path. That is what a browser is.
+
+`platform` in the surface description is `"ios"`, `"android"` or `"web"`. It is read in exactly one place — `gui/style/chrome.lua`, which says how tall a navigation bar is and what a back button looks like. Layout, styling and behaviour never read it.
 
 ## Imperative actions
 
-A ref reaches one node through `host.gui_invoke`, with `focus`, `blur`, `scrollTo`, `scrollToIndex`, `play` and `pause`. A renderer refuses a name it has no answer for rather than doing nothing quietly.
+A ref reaches one node through `host.gui_invoke`, with `focus`, `blur`, `scrollTo`, `play` and `pause`. A renderer refuses a name it has no answer for rather than doing nothing quietly, and refuses one asked of a node that cannot answer it the same way: `scrollTo` on something that does not scroll, `play` on something that is not a video. A list turns an index into an offset on the Lua side, so `scrollToIndex` never crosses.
 
 ## Proving a renderer
 

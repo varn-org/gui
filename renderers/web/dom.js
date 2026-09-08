@@ -7,6 +7,18 @@
 
 class Style {
     constructor() {
+        // A custom property is set and read by name rather than as a field, which is the only way to
+        // reach a pseudo-element from script, so the three calls that do it are what a renderer uses.
+        this.setProperty = (name, value) => {
+            this[name] = value;
+        };
+
+        this.removeProperty = (name) => {
+            this[name] = "";
+        };
+
+        this.getPropertyValue = (name) => this[name] ?? "";
+
         return new Proxy(this, {
             get: (target, key) => (key in target ? target[key] : (target[key] = "")),
             set: (target, key, value) => {
@@ -96,6 +108,10 @@ class Element {
         this.attributes[name] = value;
     }
 
+    getAttribute(name) {
+        return this.attributes[name] ?? null;
+    }
+
     addEventListener(type, handler) {
         this.listeners.set(type, (this.listeners.get(type) ?? []).concat(handler));
     }
@@ -119,20 +135,37 @@ class Element {
         this.focused = false;
     }
 
+    // Where an element sits on the page, which outside a browser is nowhere, since nothing here lays out.
+    getBoundingClientRect() {
+        return { left: 0, top: 0, width: 0, height: 0 };
+    }
+
     scrollTo({ left = 0, top = 0 }) {
         this.scrollLeft = left;
         this.scrollTop = top;
     }
 
     getContext() {
-        // One context per canvas, so the font a caller sets is the font the next measurement reads.
-        this.context = this.context ?? {
-            font: "",
-            measureText(text) {
-                const size = Number(this.font.match(/(\d+)px/)?.[1]) || 15;
+        // One context per canvas, so the font a caller sets is the font the next measurement reads, and
+        // what was drawn on it is what a test reads back.
+        if (this.context === undefined) {
+            const calls = [];
+            const records = [
+                "setTransform", "clearRect", "beginPath", "moveTo", "lineTo",
+                "closePath", "fill", "stroke", "fillText",
+            ];
+
+            this.context = { font: "", calls };
+
+            for (const name of records) {
+                this.context[name] = () => calls.push(name);
+            }
+
+            this.context.measureText = (text) => {
+                const size = Number(this.context.font.match(/(\d+)px/)?.[1]) || 15;
                 return { width: text.length * size * 0.5 };
-            },
-        };
+            };
+        }
 
         return this.context;
     }
@@ -140,13 +173,24 @@ class Element {
 
 /** Installs the document the renderer expects, answering the surface it draws into. */
 export function install() {
+    const root = new Element("html");
+
     const document = {
         createElement: (tag) => new Element(tag),
-        documentElement: new Element("html"),
+        documentElement: root,
+        getElementById: (id) => root.children.find((child) => child.id === id) ?? null,
         fonts: { add() {} },
     };
 
     globalThis.atob = (text) => Buffer.from(text, "base64").toString("binary");
+    globalThis.FileReader = class {
+        readAsDataURL(file) {
+            const encoded = Buffer.from(file.bytes ?? []).toString("base64");
+
+            this.result = `data:${file.type};base64,${encoded}`;
+            queueMicrotask(() => this.onload?.());
+        }
+    };
     globalThis.FontFace = class {
         constructor(family, source) {
             this.family = family;

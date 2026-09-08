@@ -2,11 +2,13 @@ package dev.varn.gui
 
 import android.app.Activity
 import android.view.View
+import android.widget.DatePicker
 import android.widget.EditText
-import android.widget.RadioButton
 import android.widget.FrameLayout
+import android.widget.RadioButton
 import android.widget.Switch
 import android.widget.TextView
+import android.widget.TimePicker
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -235,6 +237,28 @@ class ConformanceTest {
     }
 
     @Test
+    fun testMeasuresAStringWithWhatItWillBeDrawnWith() {
+        val plain = renderer.measureText("spacing", JSONObject(mapOf("fontSize" to 16)), null)
+        val spaced = renderer.measureText(
+            "spacing",
+            JSONObject(mapOf("fontSize" to 16, "letterSpacing" to 4)),
+            null,
+        )
+
+        assertTrue(
+            "space asked for between letters is space the line needs",
+            spaced.getDouble("width") > plain.getDouble("width"),
+        )
+
+        val tall = renderer.measureText("spacing", JSONObject(mapOf("fontSize" to 16, "lineHeight" to 3)), null)
+
+        assertTrue(
+            "and space asked for between lines is space the paragraph needs",
+            tall.getDouble("height") > plain.getDouble("height"),
+        )
+    }
+
+    @Test
     fun testReportsAnEventAsWhatTheEventCarries() {
         apply(
             mapOf(
@@ -285,6 +309,33 @@ class ConformanceTest {
     }
 
     @Test
+    fun testReportsAChosenDayAsADayRatherThanAnInstant() {
+        apply(
+            mapOf(
+                "op" to "create", "id" to 1, "type" to "datepicker",
+                "props" to JSONObject(mapOf("value" to "2026-09-05", "onChange" to true)),
+            ),
+            mapOf("op" to "insert", "id" to 1, "parent" to 0, "index" to 1),
+            mapOf(
+                "op" to "create", "id" to 2, "type" to "timepicker",
+                "props" to JSONObject(mapOf("value" to "09:30", "onChange" to true)),
+            ),
+            mapOf("op" to "insert", "id" to 2, "parent" to 0, "index" to 2),
+        )
+
+        // A picker chooses what a calendar or a clock shows, not a moment on a timeline: an instant
+        // carries a zone nobody chose, and reading it back in another one moves the day.
+        val calendar = tree()[0] as DatePicker
+        val clock = tree()[1] as TimePicker
+
+        assertEquals("a calendar takes the year it was given", 2026, calendar.year)
+        assertEquals("and the month", 8, calendar.month)
+        assertEquals("and the day", 5, calendar.dayOfMonth)
+        assertEquals("a clock takes the hour it was given", 9, clock.hour)
+        assertEquals("and the minute", 30, clock.minute)
+    }
+
+    @Test
     fun testLeavesAFieldAloneWhenItsValueHasNotChanged() {
         apply(
             mapOf(
@@ -307,7 +358,8 @@ class ConformanceTest {
     fun testDeclaresWhatItCanDo() {
         val known = listOf(
             "text", "image", "list", "scroll", "input", "video", "webview", "canvas",
-            "picker", "datepicker", "haptics", "safearea", "fontBytes",
+            "picker", "datepicker", "haptics", "safearea", "fontBytes", "imageBytes",
+            "audio", "map", "location", "gradient", "blur",
         )
 
         for (name in renderer.capabilities.keys) {

@@ -140,9 +140,60 @@ local Scrolling = gui.component({
     end,
 })
 
+--- A list beside what it opens, which is what a tablet, a wide window and an unfolded phone all are.
+local Adapting = gui.component({
+    name = "AdaptingDemo",
+    state = { chosen = nil },
+
+    render = function(self)
+        local rooms = { "Kitchen", "Hallway", "Study", "Garden" }
+        local rows = {}
+
+        for _, room in ipairs(rooms) do
+            rows[#rows + 1] = gui.Pressable {
+                key = room,
+                style = { minHeight = 48, justify = "center", paddingHorizontal = "md" },
+                accessibilityLabel = room,
+                onPress = function() self:setState({ chosen = room }) end,
+                gui.Text { text = room, style = { fontWeight = self.state.chosen == room and "600" or "400" } },
+            }
+        end
+
+        return gui.View { style = { grow = 1 },
+            gui.View { style = { padding = "md", gap = "xs" },
+                gui.Text { text = "Room for both, or one at a time", style = { fontWeight = "600" } },
+                gui.Text {
+                    text = "The width decides. Turn the device, or open a second app beside this one.",
+                    style = { fontSize = "footnote", color = "textMuted" },
+                },
+            },
+
+            gui.SplitView {
+                style = { grow = 1 },
+                sidebarWidth = 220,
+                showing = self.state.chosen ~= nil,
+                sidebar = gui.View { style = { grow = 1, background = "surface" }, table.unpack(rows) },
+                content = self.state.chosen ~= nil and gui.View {
+                    style = { grow = 1, justify = "center", align = "center", gap = "sm" },
+                    gui.Text { text = self.state.chosen, style = { fontSize = "heading", fontWeight = "700" } },
+                    gui.Button {
+                        title = "Back",
+                        variant = "tinted",
+                        onPress = function() self:setState({ chosen = gui.none }) end,
+                    },
+                } or gui.View { style = { grow = 1, justify = "center", align = "center" },
+                    gui.Text { text = "Pick a room", style = { color = "textMuted" } },
+                },
+            },
+        }
+    end,
+})
+
 return {
     { key = "flow", title = "Rows, columns and wrapping", summary = "How space is shared along an axis", render = function() return Flow {} end },
     { key = "placing", title = "Placing and spacing", summary = "Absolute edges, a spacer, a divider", render = function() return Placing {} end },
     { key = "avoiding", title = "Safe area and keyboard", summary = "Both are layout, not a platform check", render = function() return Avoiding {} end },
     { key = "scrolling", title = "Scrolling", summary = "Along either axis", render = function() return Scrolling {} end },
+    { key = "adapting", title = "A split view", summary = "Both at once where there is room, one at a time where there is not",
+        render = function() return Adapting {} end },
 }

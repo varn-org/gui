@@ -7,6 +7,10 @@ import UIKit
 /// time from a display link on the main thread, so every host call the script makes arrives on the
 /// thread that owns the interface and the renderer touches its views with no dispatch and no lock.
 public final class VarnGUIHost {
+    /// How far, or how fast, a drag from the edge counts as leaving the screen.
+    private static let backTravel: CGFloat = 60
+    private static let backSpeed: CGFloat = 400
+
     private let runtime: VarnRuntimeDriving
     private let renderer: VarnRenderer
     private let surface: UIView
@@ -35,6 +39,8 @@ public final class VarnGUIHost {
     public func start(archive: URL, framework: URL, cache: URL) throws {
         register()
         observeKeyboard()
+        dismissKeyboardOnPress()
+        observeBackGesture()
 
         let source = """
             package.path = "\(framework.path)/?.lua;\(framework.path)/?/init.lua;" .. package.path
@@ -55,7 +61,57 @@ public final class VarnGUIHost {
         self.link = link
     }
 
+    /// Reports a drag from the leading edge, which is how a reader leaves a screen on iOS.
+    ///
+    /// It has to be an edge recogniser and it has to wait for the finger. A swipe recogniser over the
+    /// whole surface takes any rightward move anywhere — dragging a carousel, a slider or a checkbox
+    /// left the screen — and it recognises the moment the movement passes its threshold, so the screen
+    /// went before the finger was lifted.
+    private func observeBackGesture() {
+        let drag = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(dragged))
+
+        drag.edges = .left
+        surface.addGestureRecognizer(drag)
+    }
+
+    @objc private func dragged(_ recogniser: UIScreenEdgePanGestureRecognizer) {
+        guard recogniser.state == .ended else {
+            return
+        }
+
+        // Far enough or fast enough, which is what the system asks of the same gesture.
+        let travelled = recogniser.translation(in: surface).x
+        let speed = recogniser.velocity(in: surface).x
+
+        guard travelled > VarnGUIHost.backTravel || speed > VarnGUIHost.backSpeed else {
+            return
+        }
+
+        runtime.emit("gui.back", "{}")
+    }
+
+    /// Takes the keyboard away when a press lands anywhere but on what is being typed into.
+    ///
+    /// Every application on a phone does this, and nothing in a tree can, since only the surface sees a
+    /// press that landed on none of its nodes. The recogniser lets the touch through, so whatever was
+    /// under the finger still receives it.
+    private func dismissKeyboardOnPress() {
+        let tap = UITapGestureRecognizer(target: self, action: #selector(dismissKeyboard))
+
+        tap.cancelsTouchesInView = false
+        surface.addGestureRecognizer(tap)
+    }
+
+    @objc private func dismissKeyboard() {
+        surface.endEditing(true)
+    }
+
+    /// Takes the surface down, which is the tree as well as the loop that was driving it.
+    ///
+    /// Stopping the pump alone leaves every screen mounted: a timer a screen asked for goes on firing
+    /// and everything a node opened is still open, on an interface nobody is looking at.
     public func stop() {
+        runtime.emit("gui.stop", "{}")
         link?.invalidate()
         link = nil
         NotificationCenter.default.removeObserver(self)
@@ -125,7 +181,7 @@ public final class VarnGUIHost {
                 return "null"
             }
 
-            return VarnJSON.text(self.renderer.measureControl(type))
+            return VarnJSON.text(self.renderer.measureControl(type, variant: request["variant"] as? String))
         }
 
         runtime.register("gui_register_font") { [weak self] json in

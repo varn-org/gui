@@ -1,6 +1,8 @@
 package dev.varn.gui
 
+import android.content.Intent
 import android.graphics.Rect
+import android.net.Uri
 import android.view.Choreographer
 import android.view.ViewGroup
 import org.json.JSONArray
@@ -35,6 +37,31 @@ class VarnGUIHost(
 
     /** Called with anything that went wrong where the application could not be told itself. */
     var onProblem: ((String) -> Unit)? = null
+
+    /**
+     * Called with the chooser a tree asked to open, since only an activity may start one for a result.
+     *
+     * A host starts the intent from its activity and hands what came back to [chose], the same way it
+     * hands over a back press. Leaving this unset is a tree with a file picker that opens nothing.
+     */
+    var onChoose: ((VarnFilePicker, Intent) -> Unit)?
+        get() = renderer.onChoose
+        set(value) { renderer.onChoose = value }
+
+    /**
+     * Called with the permission a tree asked for, since only an activity may ask a reader for one.
+     *
+     * The answer goes back through the function it is handed, so a screen that was refused is told
+     * rather than left waiting. Leaving this unset is a tree that can never be allowed anything.
+     */
+    var onPermission: ((String, (Boolean) -> Unit) -> Unit)?
+        get() = renderer.onPermission
+        set(value) { renderer.onPermission = value }
+
+    /** Hands a host's activity result to the picker that asked for it. */
+    fun chose(picker: VarnFilePicker, uris: List<Uri>) {
+        picker.chosen(uris)
+    }
 
     private val frame = object : Choreographer.FrameCallback {
         override fun doFrame(nanos: Long) {
@@ -76,18 +103,55 @@ class VarnGUIHost(
         choreographer.postFrameCallback(frame)
     }
 
+    /**
+     * Reports the platform's own way back, which is what an activity hands over on a back press.
+     *
+     * A host calls this from `onBackPressed` and acts on what it answers: a tree that had somewhere to
+     * go back to has gone there, and one that did not leaves the activity to close itself.
+     */
+    fun goBack(): Boolean {
+        runtime.emit("gui.back", "{}")
+        return running
+    }
+
+    /**
+     * Takes the surface down, which is the tree as well as the loop that was driving it.
+     *
+     * Stopping the pump alone leaves every screen mounted: a timer a screen asked for goes on firing and
+     * everything a node opened is still open, on an interface nobody is looking at.
+     */
     fun stop() {
+        runtime.emit("gui.stop", "{}")
+        runtime.poll()
+
         running = false
         choreographer.removeFrameCallback(frame)
     }
 
+    /**
+     * Registers one call the engine can make, answering an error rather than throwing through it.
+     *
+     * What is registered here is called from the engine's own frame, so a failure that escapes unwinds
+     * through it and takes the process with it. The engine is answered instead, and the application is
+     * told what went wrong.
+     */
+    private fun answering(name: String, empty: String, work: (String) -> String?) {
+        runtime.register(name) { json ->
+            runCatching { work(json) }
+                .getOrElse { problem ->
+                    onProblem?.invoke("$name failed: ${problem.message ?: problem}")
+                    empty
+                }
+        }
+    }
+
     private fun register() {
-        runtime.register("gui_apply") { json ->
+        answering("gui_apply", "null") { json ->
             renderer.apply(JSONArray(json))
             "null"
         }
 
-        runtime.register("gui_measure") { json ->
+        answering("gui_measure", "{\"width\":0,\"height\":0}") { json ->
             val request = JSONObject(json)
             val style = request.optJSONObject("style") ?: JSONObject()
             val bound = if (request.isNull("bound")) null else request.optDouble("bound")
@@ -95,27 +159,28 @@ class VarnGUIHost(
             renderer.measureText(request.optString("text"), style, bound).toString()
         }
 
-        runtime.register("gui_measure_control") { json ->
-            renderer.measureControl(JSONObject(json).getString("type")).toString()
+        answering("gui_measure_control", "{\"width\":0,\"height\":0}") { json ->
+            val request = JSONObject(json)
+            renderer.measureControl(request.getString("type"), request.optString("variant", null)).toString()
         }
 
-        runtime.register("gui_invoke") { json ->
+        answering("gui_invoke", "false") { json ->
             val request = JSONObject(json)
             val arguments = request.optJSONObject("arguments") ?: JSONObject()
 
             renderer.invoke(request.getInt("id"), request.getString("method"), arguments).toString()
         }
 
-        runtime.register("gui_problem") { json ->
+        answering("gui_problem", "null") { json ->
             onProblem?.invoke(JSONObject(json).optString("problem", "the application failed"))
             "null"
         }
 
-        runtime.register("gui_capabilities") { JSONObject(renderer.capabilities.toMap()).toString() }
+        answering("gui_capabilities", "{}") { JSONObject(renderer.capabilities.toMap()).toString() }
 
-        runtime.register("gui_surface") { renderer.surfaceDescription().toString() }
+        answering("gui_surface", "{}") { renderer.surfaceDescription().toString() }
 
-        runtime.register("gui_register_font") { json ->
+        answering("gui_register_font", "null") { json ->
             val request = JSONObject(json)
             renderer.registerFont(request.getString("family"), request.getString("path"))
             runtime.emit("gui.fontsRegistered", "{}")

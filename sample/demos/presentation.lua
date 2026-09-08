@@ -94,7 +94,9 @@ local Menus = gui.component({
                 parts.Block {
                     title = "A drawer",
                     gui.Button { title = "Open the drawer", variant = "tinted",
-                        onPress = function() self:setState({ drawer = true }) end },
+                        onPress = function() self:setState({ drawer = "left" }) end },
+                    gui.Button { title = "Open it from the other side", variant = "tinted",
+                        onPress = function() self:setState({ drawer = "right" }) end },
                 },
             },
 
@@ -110,8 +112,8 @@ local Menus = gui.component({
             },
 
             gui.Drawer {
-                open = self.state.drawer,
-                side = "left",
+                open = self.state.drawer ~= false,
+                side = self.state.drawer ~= false and self.state.drawer or "left",
                 width = 260,
                 onClose = function() self:setState({ drawer = false }) end,
                 content = gui.View { style = { padding = "lg", gap = "sm" },

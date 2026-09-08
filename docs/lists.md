@@ -63,3 +63,10 @@ The realised set stays bounded however long the data is. A list of fifty thousan
 ## Sections, grids and carousels
 
 `SectionList` groups entries under headers that may stick. `Grid` lays them in a fixed or adaptive column count. `Carousel` pages them. All three carry the same item type, reuse and extent fields, because they are the same machinery with a different arrangement.
+
+## A header that sticks
+
+`SectionList` pins the header of the section being read to the leading edge, and the next section's header pushes it off, which is what every list on a phone does. The header carries the range it is held over rather than a position, and the surface holds it there as it scrolls: a position sent from here would be one commit behind the finger, which on a flick is a header drifting across the rows it is meant to cover.
+
+`stickyHeaders = false` turns it off, and a header then scrolls away with its own section.
+

@@ -15,11 +15,14 @@ local SURFACE = {
     carousel = element.define("carousel"),
 }
 
+--- How many dots a carousel draws at once, however many pages it holds.
+local DOTS = 7
+
 --- The props that reach the surface node, which are the ones a renderer acts on.
 local CARRIED = {
     "style", "testID", "horizontal", "showsIndicator", "scrollEnabled", "bounces",
-    "refreshing", "inverted", "paging", "contentInset", "keyboardDismissMode",
-    "accessibilityLabel", "indicator", "onRefresh", "onScrollEnd",
+    "refreshing", "paging", "keyboardDismissMode",
+    "accessibilityLabel", "onRefresh", "onScrollEnd",
 }
 
 local Virtual = {}
@@ -88,11 +91,39 @@ end
 
 --- Positions a cell in content coordinates, which the surface scrolls over.
 function Virtual:cellStyle(spec, offset, extent)
+    -- A list told what its entries measure places them at exactly that, and one that was not lets each
+    -- cell be as large as what is in it and reports back what that turned out to be.
+    local sized = spec.itemExtent ~= nil
+
     if spec.horizontal then
-        return { position = "absolute", top = 0, bottom = 0, left = offset, width = extent }
+        if sized then
+            return { position = "absolute", top = 0, bottom = 0, left = offset, width = extent }
+        end
+
+        return { position = "absolute", top = 0, bottom = 0, left = offset, minWidth = extent }
     end
 
-    return { position = "absolute", left = 0, right = 0, top = offset, height = extent }
+    if sized then
+        return { position = "absolute", left = 0, right = 0, top = offset, height = extent }
+    end
+
+    return { position = "absolute", left = 0, right = 0, top = offset, minHeight = extent }
+end
+
+--- Records what a cell turned out to measure, so the offsets below it stop being an estimate.
+---
+--- A list with no declared extent placed every entry at the estimate forever, so its offsets and the
+--- extent it reported were both wrong and its scroll bar was sized against a number nobody checked.
+function Virtual:measuredCell(spec, index, frame)
+    if spec.itemExtent ~= nil then
+        return
+    end
+
+    local extent = spec.horizontal and frame.width or frame.height
+
+    if self.window:measure(index, extent) then
+        self:setState({ measured = (self.state.measured or 0) + 1 })
+    end
 end
 
 --- Answers the rule drawn at the trailing edge of a cell, which separates one entry from the next.
@@ -179,9 +210,11 @@ function Virtual:cells(spec)
             select = function() spec.onSelect({ item = spec.data[index], index = index }) end
         end
 
+        local at = index
         local node = View {
             key = self:cellKey(spec, index, cell),
             style = self:cellStyle(spec, offset, self.window:extentAt(index)),
+            onLayout = function(frame) self:measuredCell(spec, at, frame) end,
             onPress = select,
             content,
             spec.separator ~= nil and index < count and self:separator(spec) or false,
@@ -200,10 +233,43 @@ function Virtual:contentExtent()
     return self.leading + self.window:totalExtent() + self.trailing
 end
 
+--- Answers whether an offset would put anything different on screen from the one in force.
+---
+--- The surface holds a pinned header against its own scrolling, so a list that pins one re-renders when
+--- the header being pinned changes rather than for every pixel a finger moves.
+function Virtual:realises(spec, offset)
+    local viewport = self:viewport(spec)
+    local was = self.window:visible(math.max(0, self.state.scroll - self.leading), viewport)
+    local now = self.window:visible(math.max(0, offset - self.leading), viewport)
+
+    if was.first ~= now.first or was.last ~= now.last then
+        return true
+    end
+
+    return self:pinnedAt(spec, self.state.scroll) ~= self:pinnedAt(spec, offset)
+end
+
+--- Answers the entry pinned to the leading edge at an offset, which a list of rows never has.
+function Virtual:pinnedAt(spec, offset)
+    return nil
+end
+
 --- Records the scroll offset the renderer reported and says what reached the end.
+---
+--- A platform reports every pixel a finger moves, and a commit lays the whole tree out, so a list that
+--- re-rendered for each of them would spend a frame's budget on a window that has not moved.
 function Virtual:scrolled(spec, payload)
     local offset = spec.horizontal and (payload.x or 0) or (payload.y or 0)
-    self:setState({ scroll = offset })
+
+    -- A paged surface says which page it is on, so it follows the page even when every page is already
+    -- realised and the window it draws from has not moved. A carousel of a few pages is exactly that,
+    -- and its dots, the index it reports and the page it plays to all read the offset kept here.
+    local paged = spec.paging == true
+        and self.window:indexAt(offset) ~= self.window:indexAt(self.state.scroll)
+
+    if paged or self:realises(spec, offset) then
+        self:setState({ scroll = offset })
+    end
 
     if spec.onScroll ~= nil then
         spec.onScroll(payload)
@@ -278,13 +344,12 @@ function Virtual:handle()
     }
 end
 
---- Calls an action on the surface node, which is the one native view this component owns.
+--- Calls an action on the surface node, answering whether there was a surface to call it on.
+---
+--- A caller holds a ref across time — a timer that scrolls to a row, a handler that runs once an answer
+--- comes back — and by then the screen may have gone, which is life rather than a mistake.
 function Virtual:reach(method, arguments)
-    if self.surfaceRef.current == nil then
-        error("the list is not mounted, so " .. method .. " has nowhere to go", 0)
-    end
-
-    return self.surfaceRef.current.call(method, arguments)
+    return self.surfaceRef:call(method, arguments)
 end
 
 --- Answers the props the surface node carries, which never include a function the wire cannot take.
@@ -362,6 +427,9 @@ local BASE = {
     flush = Virtual.flush,
     cells = Virtual.cells,
     contentExtent = Virtual.contentExtent,
+    measuredCell = Virtual.measuredCell,
+    realises = Virtual.realises,
+    pinnedAt = Virtual.pinnedAt,
     scrolled = Virtual.scrolled,
     measured = Virtual.measured,
     handle = Virtual.handle,
@@ -454,8 +522,7 @@ M.Carousel = define("Carousel", "carousel", {
 
         self.turning = true
 
-        require("async").spawn(function()
-            require("async").sleep(self.props.autoplayInterval):await()
+        self:after(self.props.autoplayInterval, function()
             self.turning = false
 
             if self.stopped or not self.props.autoplay then
@@ -466,7 +533,12 @@ M.Carousel = define("Carousel", "carousel", {
             local landed = self.window:indexAt(self.state.scroll)
             local next = landed + 1
 
+            -- Past the last entry it either starts over or it stops, which is what `loop` says.
             if next > #spec.data then
+                if not self.props.loop then
+                    return
+                end
+
                 next = 1
             end
 
@@ -474,9 +546,13 @@ M.Carousel = define("Carousel", "carousel", {
         end)
     end,
 
+    --- The surface with the dots over it, which is what a carousel is.
+    ---
+    --- The dots are a sibling of the scrolling surface rather than one of its children, since anything
+    --- inside it travels with the page it was added to and is only ever seen over that one.
     render = function(self, kind)
         local spec = self:describe()
-        local node = self:build(spec, kind, { index = self.props.index })
+        local surface = self:build(spec, kind, { index = self.props.index, style = { grow = 1 } })
 
         if self.props.onIndexChange ~= nil then
             local landed = self.window:indexAt(self.state.scroll)
@@ -489,7 +565,49 @@ M.Carousel = define("Carousel", "carousel", {
             end
         end
 
-        return node
+        return View {
+            style = self.props.style,
+            surface,
+            self.props.indicator ~= false and #spec.data > 1 and self:Dots(#spec.data) or nil,
+        }
+    end,
+
+    --- The dots that say which page is showing, which no platform draws for a surface it is only scrolling.
+    ---
+    --- A carousel of many pages cannot draw one dot each and stay inside its own width, so the row is a
+    --- window of at most seven that travels with the page being read.
+    Dots = function(self, count)
+        local landed = self.window:indexAt(self.state.scroll)
+        local shown = math.min(count, DOTS)
+        local first = math.max(1, math.min(landed - math.floor(shown / 2), count - shown + 1))
+        local dots = {}
+
+        for index = first, first + shown - 1 do
+            dots[#dots + 1] = View {
+                key = "dot:" .. index,
+                style = {
+                    width = 7,
+                    height = 7,
+                    radius = "pill",
+                    background = index == landed and "primary" or "separator",
+                },
+            }
+        end
+
+        return View {
+            key = "dots",
+            style = {
+                position = "absolute",
+                left = 0,
+                right = 0,
+                bottom = 10,
+                direction = "row",
+                justify = "center",
+                align = "center",
+                gap = 6,
+            },
+            table.unpack(dots),
+        }
     end,
 })
 
@@ -508,16 +626,33 @@ M.Grid = define("Grid", "grid", {
         return math.max(1, math.floor(width / self.props.minColumnWidth))
     end,
 
+    --- Answers where each row of the grid starts, kept while the data and the column count both hold.
+    ---
+    --- The window is rebuilt whenever it is handed data it has not seen, so a fresh list of rows on
+    --- every render threw away every offset the grid had each time it scrolled by a pixel.
+    rowsOf = function(self, data, columns)
+        if self.rows ~= nil and self.rowsFor == data and self.rowsAcross == columns then
+            return self.rows
+        end
+
+        local rows = {}
+
+        for index = 1, #data, columns do
+            rows[#rows + 1] = index
+        end
+
+        self.rows = rows
+        self.rowsFor = data
+        self.rowsAcross = columns
+        return rows
+    end,
+
     --- Answers the grid as a list of rows, so one window and one pool serve it like any other list.
     describe = function(self, columns)
         local props = self.props
         local spacing = props.spacing or 0
         local extent = props.rowExtent or props.itemExtent or 120
-        local rows = {}
-
-        for index = 1, #props.data, columns do
-            rows[#rows + 1] = index
-        end
+        local rows = self:rowsOf(props.data, columns)
 
         return setmetatable({
             data = rows,
@@ -534,6 +669,11 @@ M.Grid = define("Grid", "grid", {
                     local entry = props.data[index]
 
                     if entry ~= nil then
+                        -- A column takes its share of the width and holds what it shows away from its
+                        -- neighbours, since a share worked out with the gaps taken off first is a length
+                        -- and a percentage at once, which a style cannot say. Half a gap on each of two
+                        -- adjacent cells is the whole of one between them, and the outer edges keep the
+                        -- padding the grid itself was given.
                         cells[#cells + 1] = View {
                             key = "column:" .. column,
                             style = {
@@ -542,6 +682,8 @@ M.Grid = define("Grid", "grid", {
                                 height = extent,
                                 left = (100 / columns * (column - 1)) .. "%",
                                 width = (100 / columns) .. "%",
+                                paddingLeft = column > 1 and spacing / 2 or 0,
+                                paddingRight = column < columns and spacing / 2 or 0,
                             },
                             props.renderItem(entry, index),
                         }
@@ -661,42 +803,60 @@ M.SectionList = define("SectionList", "sectionlist", {
     --- Answers the header that has scrolled past the leading edge, which is the one that stays pinned.
     ---
     --- A header still in its own place needs no copy of itself, so nothing is pinned until one of them
-    --- has gone under the edge.
-    pinnedIndex = function(self, entries, first)
-        local found = nil
+    --- has gone under the edge. A cell is placed at the list's leading header plus its own offset, so
+    --- the offset a header is compared against has that header taken back off it.
+    pinnedAt = function(self, spec, offset)
+        if self.props.stickyHeaders == false or #spec.data == 0 then
+            return nil
+        end
 
-        for index = 1, first do
-            if entries[index].header and self.window:offsetOf(index) < self.state.scroll then
-                found = index
+        local top = math.max(0, offset - self.leading)
+
+        -- The search starts at the top of the viewport rather than at the top of the realised range,
+        -- which begins a margin of cells earlier: from there it finds the header of the group before
+        -- the one on screen.
+        for index = self.window:indexAt(top), 1, -1 do
+            if spec.data[index].header and self.window:offsetOf(index) < top then
+                return index
             end
         end
 
-        return found
+        return nil
+    end,
+
+    --- Answers where the section a header belongs to ends, which is where the next one pushes it off.
+    sectionEnd = function(self, entries, index)
+        for at = index + 1, #entries do
+            if entries[at].header then
+                return self.window:offsetOf(at)
+            end
+        end
+
+        return self.window:totalExtent()
     end,
 
     render = function(self, kind)
         local spec = self:describe()
         local node = self:build(spec, kind, { stickyHeaders = self.props.stickyHeaders ~= false })
+        local index = self:pinnedAt(spec, self.state.scroll)
 
-        if self.props.stickyHeaders == false or #spec.data == 0 then
+        if index == nil then
             return node
         end
 
-        -- The pinned header is the last one above the top of the viewport, which is not the top of the
-        -- realised range: that starts a margin of cells earlier, so searching only that far leaves the
-        -- header of the group before the one on screen pinned over it.
-        local index = self:pinnedIndex(spec.data, self.window:indexAt(math.max(0, self.state.scroll)))
+        local entry = spec.data[index]
+        local from = self.leading + self.window:offsetOf(index)
 
-        if index ~= nil then
-            local entry = spec.data[index]
-
-            -- The pinned header is the last child, so it draws over the rows sliding beneath it.
-            node.children[#node.children + 1] = View {
-                key = "pinned",
-                style = self:cellStyle(spec, self.state.scroll, self.props.headerExtent or 32),
-                self.props.renderHeader(entry.section, entry.sectionIndex),
-            }
-        end
+        -- The pinned header is the last child, so it draws over the rows sliding beneath it, and the
+        -- surface holds it against its own scrolling: placed from here it would follow a finger a
+        -- commit late, which is a header drifting over the rows it is meant to cover.
+        node.children[#node.children + 1] = View {
+            key = "pinned",
+            pinned = { from = from, to = self.leading + self:sectionEnd(spec.data, index) },
+            style = { position = "absolute", left = 0, right = 0, top = from,
+                height = self.window:extentAt(index) },
+            self.props.renderHeader(entry.section, entry.sectionIndex),
+        }
 
         return node
     end,

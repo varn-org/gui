@@ -2,7 +2,6 @@ local gui = require("gui")
 local catalogue = require("catalogue")
 
 --- The proportions the chrome is built from, which are the ones the platforms themselves use.
-local BAR = 44
 local ROW = 60
 local HEADER = 34
 
@@ -38,35 +37,6 @@ local Gallery = gui.component({
         self:setState({ open = gui.none })
     end,
 
-    --- The bar over a demo: one row the height a platform draws it at, with the way back on the left.
-    ---
-    --- The title is centred in the bar rather than pushed along by whatever sits beside it, so it reads
-    --- the same whether or not there is a way back to draw.
-    Bar = function(self, title)
-        return gui.View {
-            style = { height = BAR, background = "background" },
-
-            gui.View {
-                style = { position = "absolute", left = 0, right = 0, top = 0, bottom = 0,
-                    justify = "center", align = "center", paddingHorizontal = 64 },
-                gui.Text {
-                    text = title,
-                    numberOfLines = 1,
-                    style = { fontSize = "headline", fontWeight = "600", color = "text", textAlign = "center" },
-                },
-            },
-
-            gui.Pressable {
-                style = { position = "absolute", left = 0, top = 0, bottom = 0,
-                    direction = "row", align = "center", paddingHorizontal = "sm", gap = 2 },
-                accessibilityLabel = "Back",
-                onPress = function() self:close() end,
-                gui.Text { text = "‹", style = { fontSize = "title", color = "primary" } },
-                gui.Text { text = "Gallery", style = { fontSize = "body", color = "primary" } },
-            },
-        }
-    end,
-
     --- A row of the index, which opens what it names.
     Row = function(self, group, item)
         return gui.Pressable {
@@ -87,7 +57,7 @@ local Gallery = gui.component({
                 },
             },
 
-            gui.Text { text = "›", style = { fontSize = "title", color = "textMuted", paddingRight = "md" } },
+            gui.Icon { name = "chevron-right", size = 16, color = "textMuted", style = { marginRight = "md" } },
         }
     end,
 
@@ -118,29 +88,64 @@ local Gallery = gui.component({
         }
     end,
 
-    render = function(self)
-        local demo = self:current()
+    Sidebar = function(self)
+        return gui.View { style = { grow = 1, background = "surface" }, self:Index() }
+    end,
 
+    Body = function(self, demo)
         if demo == nil then
-            return gui.SafeArea {
-                style = { grow = 1, background = "surface" },
-                gui.View {
-                    style = { paddingHorizontal = "md", paddingTop = "sm", paddingBottom = "xs",
-                        background = "surface" },
-                    gui.Text {
-                        text = "Varn GUI",
-                        style = { fontSize = "display", fontWeight = "700", color = "text" },
-                    },
-                },
-                self:Index(),
+            return gui.View {
+                style = { grow = 1, background = "background", justify = "center", align = "center" },
+                gui.Text { text = "Pick something on the left", style = { color = "textMuted" } },
             }
         end
 
+        return gui.View { style = { grow = 1, background = "background" }, demo.render() }
+    end,
+
+    --- The index beside what it opened, or one at a time where there is no room for both.
+    ---
+    --- One tree, whichever there is room for. Rendering a split when it fits and a stack when it does not
+    --- is two different trees, and a turn of the phone crosses between them: everything under either is
+    --- taken down and built again, so a reader loses whatever they had put into it.
+    render = function(self)
+        local demo = self:current()
+        local together = gui.environment:read(self).breakpoint ~= "compact"
+
         return gui.SafeArea {
-            style = { grow = 1, background = "background" },
-            self:Bar(demo.title),
-            gui.Divider { color = "separator" },
-            gui.View { style = { grow = 1 }, demo.render() },
+            style = { grow = 1, background = "surface" },
+
+            -- What the status bar and the home indicator sit over, which is the bar's own colour so the
+            -- bar runs all the way up rather than ending in a hard edge below the clock.
+            barStyle = { background = "background" },
+
+            gui.SplitView {
+                sidebarWidth = 340,
+                showing = demo ~= nil,
+
+                sidebar = gui.NavigationStack {
+                    style = { grow = 1 },
+                    screens = { { key = "index", title = "Varn GUI", content = self:Sidebar() } },
+                },
+
+                content = gui.NavigationStack {
+                    style = { grow = 1 },
+
+                    -- With the index beside it there is nowhere to go back to, and with it covered there is.
+                    onBack = not together and function() self:close() end or nil,
+                    backTitle = "Varn GUI",
+
+                    -- A whole application draws its own bar, so a second one over it is two bars and a
+                    -- title that is not the screen's.
+                    hidesBar = demo ~= nil and demo.chrome == false,
+
+                    screens = {
+                        { key = demo ~= nil and demo.key or "empty",
+                          title = demo ~= nil and demo.title or "Gallery",
+                          content = self:Body(demo) },
+                    },
+                },
+            },
         }
     end,
 })

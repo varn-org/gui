@@ -175,6 +175,19 @@ final class ConformanceTests: XCTestCase {
         }
     }
 
+    func testMeasuresAStringWithWhatItWillBeDrawnWith() {
+        let plain = renderer.measureText("spacing", style: ["fontSize": 16], bound: nil)
+        let spaced = renderer.measureText("spacing", style: ["fontSize": 16, "letterSpacing": 4], bound: nil)
+
+        XCTAssertGreaterThan(spaced["width"] ?? 0, plain["width"] ?? 0,
+                             "space asked for between letters is space the line needs")
+
+        let tall = renderer.measureText("spacing", style: ["fontSize": 16, "lineHeight": 3], bound: nil)
+
+        XCTAssertGreaterThan(tall["height"] ?? 0, plain["height"] ?? 0,
+                             "and space asked for between lines is space the paragraph needs")
+    }
+
     func testReportsAnEventAsWhatTheEventCarries() throws {
         try renderer.apply([
             ["op": "create", "id": 1, "type": "switch", "props": ["value": false, "onChange": true]],
@@ -214,6 +227,23 @@ final class ConformanceTests: XCTestCase {
         XCTAssertFalse(other.isChecked, "the other radio must be left alone")
     }
 
+    func testReportsAChosenDayAsADayRatherThanAnInstant() throws {
+        try renderer.apply([
+            ["op": "create", "id": 1, "type": "datepicker", "props": ["value": "2026-09-05", "onChange": true]],
+            ["op": "insert", "id": 1, "parent": 0, "index": 1],
+            ["op": "create", "id": 2, "type": "timepicker", "props": ["value": "09:30", "onChange": true]],
+            ["op": "insert", "id": 2, "parent": 0, "index": 2],
+        ])
+
+        // A picker chooses what a calendar or a clock shows, not a moment on a timeline: an instant
+        // carries a zone nobody chose, and reading it back in another one moves the day.
+        let calendar = try XCTUnwrap(tree()[0] as? VarnDatePicker)
+        let clock = try XCTUnwrap(tree()[1] as? VarnDatePicker)
+
+        XCTAssertEqual(calendar.chosen, "2026-09-05", "a calendar takes the day it was given")
+        XCTAssertEqual(clock.chosen, "09:30", "and a clock the time it was given")
+    }
+
     func testLeavesAFieldAloneWhenItsValueHasNotChanged() throws {
         try renderer.apply([
             ["op": "create", "id": 1, "type": "textinput", "props": ["value": "Ada", "onChange": true]],
@@ -236,7 +266,8 @@ final class ConformanceTests: XCTestCase {
     func testDeclaresWhatItCanDo() {
         let known = [
             "text", "image", "list", "scroll", "input", "video", "webview", "canvas",
-            "picker", "datepicker", "haptics", "safearea",
+            "picker", "datepicker", "haptics", "safearea", "fontBytes", "imageBytes",
+            "audio", "map", "location", "gradient", "blur",
         ]
 
         for name in renderer.capabilities.keys {

@@ -22,7 +22,10 @@ M.removed = protocol.removed
 --- A style is data rather than an object, so the same style written again is the same style. Comparing
 --- those by identity would mark every node in the tree as changed on every commit, which is an update
 --- for each of them over the bridge and a layout pass that can keep nothing.
-local LITERAL = { style = true, contentStyle = true, edges = true }
+local LITERAL = {
+    style = true, contentStyle = true, edges = true, transition = true, enter = true,
+    commands = true, spans = true, options = true, segments = true, pinned = true,
+}
 
 local sameValue
 
@@ -152,7 +155,88 @@ local function renderInstance(node)
     return rendered
 end
 
-local function mountComponent(source, ops, pending, parent)
+--- Tells a component a moment has come, without letting what it does then take the commit with it.
+---
+--- The half of the lifecycle that runs before the batch runs inside the diff, so a component whose
+--- handler fails would stop the whole tree being built rather than only itself.
+local function tell(instance, name)
+    local handler = instance[name]
+
+    if handler == nil then
+        return
+    end
+
+    local ok, problem = pcall(handler, instance)
+
+    if not ok and instance.scheduler ~= nil then
+        instance.scheduler.report("a component's " .. name .. " failed: " .. tostring(problem))
+    end
+end
+
+--- Fires the moments a component is told about as it is built, shown, hidden and taken down.
+---
+--- The `will` half runs against the tree as it stands, before the batch reaches the platform, and the
+--- other half is held until the batch has been applied, which is what makes "before" and "after" mean
+--- what they say rather than both meaning the same instant.
+local function showing(node, pending)
+    local instance = node.instance
+
+    if not instance.watchesVisibility then
+        return
+    end
+
+    local visible = instance:visible()
+
+    if visible == instance.shown then
+        return
+    end
+
+    -- What was built out of sight has not gone from the screen, since it was never on it.
+    local first = instance.shown == nil
+
+    instance.shown = visible
+
+    if not visible and first then
+        return
+    end
+
+    if visible then
+        tell(instance, "onWillAppear")
+
+        if instance.onAppear then
+            pending[#pending + 1] = function() instance:onAppear() end
+        end
+
+        return
+    end
+
+    tell(instance, "onWillDisappear")
+
+    if instance.onDisappear then
+        pending[#pending + 1] = function() instance:onDisappear() end
+    end
+end
+
+--- Answers the props of a node that is arriving inside something already arriving, which is its own
+--- arrival taken off it.
+---
+--- A screen pushed onto a stack travels in from the side, and everything mounted with it is mounted in
+--- the same commit: a block that also arrives from below adds its own travel to the screen's and the
+--- whole thing comes in diagonally. One arrival at a time, which is what a platform does with a pushed
+--- screen — the screen moves and what is inside it moves with it.
+local function settled(props)
+    local copy = {}
+
+    for key, value in pairs(props) do
+        if key ~= "enter" then
+            copy[key] = value
+        end
+    end
+
+    return copy
+end
+
+local function mountComponent(source, ops, pending, parent, arriving)
     local node = {
         kind = "component",
         type = source.type,
@@ -162,16 +246,22 @@ local function mountComponent(source, ops, pending, parent)
     }
 
     node.instance = source.type.instantiate(source.props, source.children, node)
-    node.child = mount(renderInstance(node), ops, pending, node)
 
+    tell(node.instance, "onWillMount")
+
+    node.child = mount(renderInstance(node), ops, pending, node, arriving)
+
+    -- Built before shown, which is the order the moments mean: a screen is loaded and then it appears.
     if node.instance.onMount then
         pending[#pending + 1] = function() node.instance:onMount() end
     end
 
+    showing(node, pending)
+
     return node
 end
 
-local function mountHost(source, ops, pending, parent)
+local function mountHost(source, ops, pending, parent, arriving)
     local node = {
         id = claimId(),
         kind = "host",
@@ -182,10 +272,20 @@ local function mountHost(source, ops, pending, parent)
         children = {},
     }
 
-    ops[#ops + 1] = { op = "create", id = node.id, type = node.type, props = node.props }
+    -- The node keeps what it was given, so what it is compared against next time is unchanged: only the
+    -- batch that builds it leaves the arrival out.
+    local sent = node.props
+
+    if arriving and sent.enter ~= nil then
+        sent = settled(sent)
+    end
+
+    ops[#ops + 1] = { op = "create", id = node.id, type = node.type, props = sent }
+
+    local inside = arriving or source.props.enter ~= nil
 
     for index = 1, #source.children do
-        local child = mount(source.children[index], ops, pending, node)
+        local child = mount(source.children[index], ops, pending, node, inside)
         node.children[index] = child
         ops[#ops + 1] = { op = "insert", id = hostOf(child).id, parent = node.id, index = index }
     end
@@ -193,16 +293,30 @@ local function mountHost(source, ops, pending, parent)
     return node
 end
 
-mount = function(source, ops, pending, parent)
+mount = function(source, ops, pending, parent, arriving)
     if isComponent(source) then
-        return mountComponent(source, ops, pending, parent)
+        return mountComponent(source, ops, pending, parent, arriving)
     end
 
-    return mountHost(source, ops, pending, parent)
+    return mountHost(source, ops, pending, parent, arriving)
 end
 
 unmount = function(node, ops, pending)
     if node.kind == "component" then
+        -- A screen taken down while it was on screen goes from the screen first, which is the order the
+        -- platforms tell one about it in: it disappears, and then it is taken down.
+        if node.instance.watchesVisibility and node.instance.shown then
+            node.instance.shown = false
+
+            tell(node.instance, "onWillDisappear")
+
+            if node.instance.onDisappear then
+                pending[#pending + 1] = function() node.instance:onDisappear() end
+            end
+        end
+
+        tell(node.instance, "onWillUnmount")
+
         if node.instance.onUnmount then
             pending[#pending + 1] = function() node.instance:onUnmount() end
         end
@@ -216,6 +330,14 @@ unmount = function(node, ops, pending)
         unmount(node.children[index], ops, pending)
     end
 
+    -- A ref points at nothing once what it pointed at has gone, or it reaches a node the renderer has
+    -- already forgotten and answers with a failure from inside the bridge.
+    local holder = node.props.ref
+
+    if type(holder) == "table" and holder.current ~= nil and holder.current.id == node.id then
+        holder.current = nil
+    end
+
     ops[#ops + 1] = { op = "remove", id = node.id }
 end
 
@@ -227,8 +349,14 @@ local function keyOf(source, index)
     return index
 end
 
+--- Answers whether a node already on screen is the one a description names, rather than a new one.
+---
+--- A key is what says two nodes of the same type are different things. Comparing only the type made a
+--- component's own root immune to its key, so a component that says it is showing something else by
+--- changing the key was patched in place instead: it never arrived, so nothing it declared to arrive
+--- from was ever applied and every overlay appeared in one frame.
 local function reusable(previous, source)
-    return previous ~= nil and previous.type == source.type
+    return previous ~= nil and previous.type == source.type and previous.key == source.key
 end
 
 local function patchChildren(node, sources, ops, pending)
@@ -309,6 +437,8 @@ patch = function(node, source, ops, pending)
             node.child = mount(rendered, ops, pending, node)
         end
 
+        showing(node, pending)
+
         if node.instance.onUpdate then
             pending[#pending + 1] = function() node.instance:onUpdate(before) end
         end
@@ -339,6 +469,15 @@ function M.mount(source)
     return node, ops, pending
 end
 
+--- Takes a retained tree down, answering the operations that remove it and the callbacks it owes.
+function M.unmount(node)
+    local ops = {}
+    local pending = {}
+
+    unmount(node, ops, pending)
+    return ops, pending
+end
+
 --- Reconciles a retained tree against a new description, answering only what changed.
 function M.reconcile(node, source)
     if node.type ~= source.type then
@@ -351,6 +490,32 @@ function M.reconcile(node, source)
     return ops, pending
 end
 
+--- Answers the host a node hangs from and the position it hangs at, which is where a replacement goes.
+---
+--- A component holds no view of its own, so the node a renderer knows about is the nearest host above
+--- it, and the position is where the branch this node stands in sits among that host's children.
+local function attachment(node)
+    local child = node
+    local parent = node.parentNode
+
+    while parent ~= nil and parent.kind ~= "host" do
+        child = parent
+        parent = parent.parentNode
+    end
+
+    if parent == nil then
+        return 0, 1
+    end
+
+    for index = 1, #parent.children do
+        if parent.children[index] == child then
+            return parent.id, index
+        end
+    end
+
+    error("a component was reconciled outside the tree it belongs to", 0)
+end
+
 --- Reconciles the subtree one component owns, which is what a state change needs.
 function M.reconcileComponent(node)
     local ops = {}
@@ -360,14 +525,14 @@ function M.reconcileComponent(node)
     if reusable(node.child, rendered) then
         patch(node.child, rendered, ops, pending)
     else
-        local parent = node.parent
+        local parent, index = attachment(node)
+
         unmount(node.child, ops, pending)
         node.child = mount(rendered, ops, pending, node)
-
-        if parent ~= nil then
-            ops[#ops + 1] = { op = "insert", id = hostOf(node.child).id, parent = parent, index = node.index or 1 }
-        end
+        ops[#ops + 1] = { op = "insert", id = hostOf(node.child).id, parent = parent, index = index }
     end
+
+    showing(node, pending)
 
     if node.instance.onUpdate then
         pending[#pending + 1] = function() node.instance:onUpdate(node.props) end
@@ -377,5 +542,8 @@ function M.reconcileComponent(node)
 end
 
 M.hostOf = hostOf
+
+--- Answers whether two values say the same thing, which is what a style is compared by.
+M.sameValue = sameValue
 
 return M

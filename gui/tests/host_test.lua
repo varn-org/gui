@@ -127,13 +127,27 @@ async.run(function()
             gui.Text { text = "content" },
         })
 
-        local frames = operations(recorder, "frame")
-        local label = nil
+        -- The text is what has to sit clear of the notch, so its own frame is what is read rather than
+        -- whichever frame the layout happened to send last.
+        local created = operations(recorder, "create")
+        local wanted = nil
 
-        for index = 1, #frames do
-            label = frames[index]
+        for index = 1, #created do
+            if created[index].type == "text" then
+                wanted = created[index].id
+            end
         end
 
+        local label = nil
+        local frames = operations(recorder, "frame")
+
+        for index = 1, #frames do
+            if frames[index].id == wanted then
+                label = frames[index]
+            end
+        end
+
+        assert(label ~= nil, "the text must have been placed")
         assert(label.y == 47, "the safe area the host reported must already be avoided, got " .. label.y)
         assert(app ~= nil)
     end
@@ -242,7 +256,7 @@ end
         assert(app.bundle.manifest.identifier == "dev.varn.gui.launched", "the runtime carries the project it ran")
     end
 
-    -- A component asking for something the renderer has no answer for is refused rather than ignored.
+    -- What a renderer can do is what it declared, which is what a caller reads before asking for it.
     do
         platform({ capabilities = { text = true, video = false } })
         local app = bridge.run(gui.View {})
@@ -250,10 +264,6 @@ end
 
         assert(renderer:can("text"), "a declared capability is available")
         assert(not renderer:can("video"), "an undeclared capability is not")
-
-        local ok, message = pcall(renderer.require, renderer, "video", "the player screen")
-        assert(not ok, "asking for a missing capability must be refused")
-        assert(tostring(message):find("video"), "the refusal names what was missing")
     end
 
     -- Without a host there is nothing to draw on, which is said rather than discovered later.
@@ -263,6 +273,31 @@ end
 
         assert(not ok, "running with no host must be refused")
         assert(tostring(message):find("no gui host"), "the refusal says what is missing")
+    end
+
+        -- A host that is finished with a surface takes the tree down with it.
+    --
+    -- Stopping the loop alone leaves every screen mounted: a timer a screen asked for goes on firing
+    -- and everything a node opened is still open, on an interface nobody is looking at.
+    do
+        local recorder = platform()
+        local gone = false
+
+        local Screen = gui.component({
+            name = "Screen",
+            onUnmount = function() gone = true end,
+            render = function() return gui.Text { text = "here" } end,
+        })
+
+        local app = bridge.run(Screen {})
+
+        app:commit()
+        assert(not gone, "the screen is up while the host is running")
+
+        recorder.handlers["gui.stop"]({})
+
+        assert(gone, "and it is taken down when the host says it is finished")
+        assert(not app:needsCommit(), "with nothing left to commit")
     end
 
     print("gui.host ok")

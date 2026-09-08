@@ -15,5 +15,14 @@ async.run(function()
     assert(#broken == 0, "nothing reads " .. #broken .. " of the props and events declared:\n  "
         .. table.concat(broken, "\n  "))
 
+    -- Every node type a component is built on is one all three renderers can build.
+    --
+    -- A component wired into two of them is a screen that draws on two platforms and throws on the
+    -- third, where a renderer refuses a type it has no view for rather than drawing nothing quietly.
+    local missing = promises.unbuilt()
+
+    assert(#missing == 0, "a renderer has no view for " .. #missing .. " of the types declared:\n  "
+        .. table.concat(missing, "\n  "))
+
     print("gui.promises ok")
 end)

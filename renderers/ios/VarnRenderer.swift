@@ -17,7 +17,7 @@ public final class VarnRenderer {
         "text": true, "image": true, "list": true, "scroll": true, "input": true,
         "video": true, "webview": true, "canvas": true,
         "picker": true, "datepicker": true,
-        "haptics": true, "safearea": true,
+        "haptics": true, "safearea": true, "audio": true, "map": true, "location": true, "gradient": true, "blur": true,
     ]
 
     public init(surface: UIView, emit: @escaping EventSink) {
@@ -29,6 +29,12 @@ public final class VarnRenderer {
         let view: UIView
         let type: String
         var props: [String: Any] = [:]
+
+        /// Whether the node has been on screen once, which is what tells an arrival from a change.
+        var settled = false
+
+        /// Whether the arrival it was given is still waiting for the frame it is drawn against.
+        var arriving = false
 
         init(view: UIView, type: String) {
             self.view = view
@@ -69,6 +75,9 @@ public final class VarnRenderer {
         if let props = op["props"] as? [String: Any] {
             try apply(props: props, to: node, id: id)
         }
+
+        node.settled = true
+        node.arriving = node.props["enter"] != nil
     }
 
     private func expect(_ id: Int?) throws -> Node {
@@ -93,7 +102,9 @@ public final class VarnRenderer {
     /// A batch carries props as a map, so they arrive in no order at all. Rebuilding the segments of a
     /// control after the chosen one was set would drop the choice on whichever batch happened to be
     /// ordered that way, which is a defect that comes and goes rather than one that can be found.
-    private static let structural: Set<String> = ["segments", "options", "count", "text", "title", "label"]
+    private static let structural: Set<String> = [
+        "segments", "options", "count", "text", "title", "label", "transition", "enter",
+    ]
 
     private func apply(props: [String: Any], to node: Node, id: Int) throws {
         let ordered = props.sorted { first, second in
@@ -104,12 +115,52 @@ public final class VarnRenderer {
             let value = VarnValue.isRemoved(raw) ? nil : raw
             node.props[key] = value
 
+            if key == "transition" || key == "enter" {
+                continue
+            }
+
             if key == "style" {
-                VarnStyle.apply(value as? [String: Any] ?? [:], to: node.view, type: node.type)
+                apply(style: value as? [String: Any] ?? [:], to: node)
             } else {
                 VarnProps.apply(key: key, value: value, to: node.view, type: node.type, id: id, emit: emit)
             }
         }
+
+        (node.view as? VarnSettling)?.settle()
+    }
+
+    /// Applies a style, over time when the node was told how long the change should take.
+    private func apply(style: [String: Any], to node: Node) {
+        guard node.settled, let timing = VarnMotion.timing(node.props["transition"]) else {
+            VarnStyle.apply(style, to: node.view, type: node.type)
+            return
+        }
+
+        VarnMotion.animate(timing) { [view = node.view, type = node.type] in
+            VarnStyle.apply(style, to: view, type: type)
+        }
+    }
+
+    /// Draws the arrival of a node that was given a state to come from, once it knows what size it is.
+    ///
+    /// It waits for the frame because a state is written against the node it moves: a panel that arrives
+    /// from the whole of its own height has no height to travel until the layout has given it one, and a
+    /// view animated before it is placed has nothing to animate from.
+    private func arrive(_ node: Node) {
+        node.arriving = false
+
+        guard let entering = node.props["enter"] as? [String: Any],
+              let timing = VarnMotion.timing(node.props["transition"]) else {
+            return
+        }
+
+        VarnMotion.arrive(
+            node.view,
+            entering: entering,
+            settled: node.props["style"] as? [String: Any] ?? [:],
+            type: node.type,
+            timing: timing
+        )
     }
 
     private func place(_ op: [String: Any]) throws {
@@ -146,7 +197,15 @@ public final class VarnRenderer {
             height: VarnValue.number(op["height"]) ?? 0
         )
 
-        node.view.frame = frame
+        // A frame is undefined while a view carries a transform, since UIKit works one out through the
+        // other. A commit landing during an animation therefore moved the view for good, by however far
+        // the animation had travelled by then. Bounds and centre mean the same thing whatever the
+        // transform is, so a screen sliding in is placed as exactly as one standing still.
+        //
+        // Only the size is written, since a scrolling view's bounds origin is its content offset and a
+        // zero written there puts every list back to the top on every commit.
+        node.view.bounds = CGRect(origin: node.view.bounds.origin, size: frame.size)
+        node.view.center = CGPoint(x: frame.midX, y: frame.midY)
 
         // A pill radius is only known to be one once the box has a size, so it is held to what the box
         // can hold here as well as where the style is applied.
@@ -154,19 +213,45 @@ public final class VarnRenderer {
         let radius = VarnStyle.cornerRadius(VarnValue.number(style["radius"]) ?? 0, in: frame.size)
 
         node.view.layer.cornerRadius = radius
+
+        // What a map is looking at depends on how big it turned out to be, so it is settled with the
+        // frame rather than only with the props, and a box held against an edge is held again from
+        // wherever the frame has just put it.
+        (node.view as? VarnSettling)?.settle()
+
+        if (node.view as? VarnView)?.pinned != nil {
+            (node.view.superview?.superview as? VarnCollectionView)?.hold()
+        }
         node.view.clipsToBounds = VarnStyle.clips(style, node.view, radius: radius)
 
-        // The engine decided how many lines fit, so a label never wraps into one it has no room for.
+        // A label never wraps into a line it has no room for, unless the tree said how many it may run
+        // to, which is a caller's own decision and not one a frame may take back.
         if let label = node.view as? UILabel, label.font.lineHeight > 0 {
-            label.numberOfLines = max(1, Int(frame.height / label.font.lineHeight))
+            let declared = node.props["numberOfLines"] as? Int
+
+            label.numberOfLines = declared ?? max(1, Int(frame.height / label.font.lineHeight))
             label.lineBreakMode = .byTruncatingTail
+        }
+
+        // A travel written as a share of the node is worked out against the size the layout has just
+        // given it, rather than against the nothing it was when it was created. Only what the style
+        // names is written: a node arriving carries its travel in `enter`, and clearing that here left
+        // the arrival with nowhere to come from.
+        if let transform = style["transform"] {
+            VarnStyle.applyTransform(transform, to: node.view)
+        }
+
+        if node.arriving {
+            arrive(node)
         }
     }
 
     /// Answers what a string measures, which the layout engine caches and never guesses at.
     public func measureText(_ text: String, style: [String: Any], bound: CGFloat?) -> [String: CGFloat] {
         let font = VarnStyle.font(from: style)
-        let key = "\(text)|\(font.fontName)|\(font.pointSize)|\(bound ?? -1)" as NSString
+        let spacing = VarnValue.number(style["letterSpacing"]) ?? 0
+        let leading = VarnValue.number(style["lineHeight"]) ?? 0
+        let key = "\(text)|\(font.fontName)|\(font.pointSize)|\(spacing)|\(leading)|\(bound ?? -1)" as NSString
 
         if let cached = measurements.object(forKey: key)?.cgSizeValue {
             return ["width": cached.width, "height": cached.height]
@@ -174,7 +259,7 @@ public final class VarnRenderer {
 
         // A bound of zero is a node that has not been measured yet, not a node with no room.
         let usable = (bound ?? 0) > 0 ? bound! : CGFloat.greatestFiniteMagnitude
-        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+        let attributes = VarnStyle.attributes(from: style)
         let single = (text as NSString).size(withAttributes: attributes)
 
         // A label lays its own text out with `size(withAttributes:)`, so a line that fits is measured
@@ -200,14 +285,23 @@ public final class VarnRenderer {
     /// A number written into the tree is a number that was true of one platform on one day: a switch was
     /// 51 across until it was 61, and a frame worked out from the old one spills the control out of the
     /// box it was given.
-    public func measureControl(_ type: String) -> [String: CGFloat] {
+    /// A variant names which of a control the tree asked for, since a wheel and a compact date are two
+    /// different controls to lay out and only one of them is what the factory makes by default.
+    public func measureControl(_ type: String, variant: String?) -> [String: CGFloat] {
         let control = VarnViewFactory.make(type: type)
+
+        if variant == "wheel", let picker = control as? UIDatePicker {
+            picker.preferredDatePickerStyle = .wheels
+        }
+
         var size = control.intrinsicContentSize
 
-        // A wheel and a chooser answer nothing until they are asked to fit, so both questions are put.
-        if size.width <= 0 || size.height <= 0 {
-            let fitted = control.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
-            size = CGSize(width: max(size.width, fitted.width), height: max(size.height, fitted.height))
+        // A control answering `noIntrinsicMetric` for an axis is the platform saying it has no opinion
+        // about that axis and fills whatever room it is given, which is what a slider does with a row.
+        // Asking such a control to fit gives the smallest it can be drawn at, which is not an opinion:
+        // a slider answered 37 points and was laid out as a thumb with no track beside it.
+        if size.width == UIView.noIntrinsicMetric && size.height == UIView.noIntrinsicMetric {
+            size = control.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
         }
 
         return [
@@ -246,6 +340,7 @@ public final class VarnRenderer {
             "width": surface.bounds.width,
             "height": surface.bounds.height,
             "scale": UIScreen.main.scale,
+            "platform": "ios",
             "appearance": surface.traitCollection.userInterfaceStyle == .dark ? "dark" : "light",
             "safeArea": [
                 "top": insets.top,

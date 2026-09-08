@@ -43,17 +43,11 @@ jobs:
             node --check "$file"
           done
 
-      - name: Run the conformance suite against the DOM renderer
-        run: node renderers/web/tests/conformance.test.js
-
-      - name: Check the controls the browser has none of
-        run: node renderers/web/tests/controls.test.js
-
-      - name: Run the gallery against the wasm engine
+      - name: Run the whole suite against the DOM renderer
         run: |
           python3 run.py fetch-native --platform web
           python3 run.py web
-          node renderers/web/tests/gallery.test.js
+          node --test renderers/web/tests/
 
   ios:
     name: ios renderer
@@ -76,6 +70,23 @@ jobs:
             -project VarnGUIRenderer.xcodeproj \
             -scheme VarnGUIRendererTests \
             -destination 'platform=iOS Simulator,name=iPhone 16' \
+            | grep -E "Executed [0-9]+ test|\*\* TEST"
+
+      # What a tree-based case cannot see: a bar that will not change tab, a control drawn half outside
+      # the box it belongs to, a field that loses what was typed into it while the tree catches up.
+      - name: Drive the gallery with a finger
+        run: |
+          python3 run.py fetch-native --platform ios
+          python3 run.py sample
+          cd apps/ios
+          xcodegen generate
+          set -o pipefail
+          xcodebuild test \
+            -project VarnGUIGallery.xcodeproj \
+            -scheme VarnGUIGallery \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -only-testing:VarnGUIGalleryUITests \
+            CODE_SIGNING_ALLOWED=NO \
             | grep -E "Executed [0-9]+ test|\*\* TEST"
 
   android:

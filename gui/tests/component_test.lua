@@ -211,4 +211,45 @@ do
     assert(seen == nil, "none clears the field")
 end
 
+-- State set to false is false, which is not the same thing as state that is not there.
+--
+-- Written as `value ~= none and value or nil`, false is the middle of an `and`/`or` and Lua takes the
+-- other branch for it, so every state a screen set to false was stored as nothing at all. It reads as
+-- false everywhere except against false itself, which is where it surfaced: a drawer asking whether it
+-- was open compared its state with false, got nil, and never closed.
+do
+    local Toggling = gui.component({
+        name = "Toggling",
+        state = { open = true, count = 0 },
+        render = function(self)
+            return gui.Text { text = tostring(self.state.open) }
+        end,
+    })
+
+    local renderer = gui.headless()
+    local runtime = gui.start(Toggling {}, renderer, { size = { width = 320, height = 480 } })
+
+    for _ = 1, 4 do
+        if not runtime:needsCommit() then
+            break
+        end
+
+        runtime:commit()
+    end
+
+    local instance = runtime.root.instance
+
+    instance:setState({ open = false })
+
+    assert(instance.state.open == false,
+        "state set to false is false, is " .. tostring(instance.state.open))
+    assert(instance.state.open ~= nil, "and it is not nothing at all")
+
+    instance:setState({ count = 0 })
+    assert(instance.state.count == 0, "and a zero is a zero, is " .. tostring(instance.state.count))
+
+    instance:setState({ open = gui.none })
+    assert(instance.state.open == nil, "and the sentinel is what takes a state away")
+end
+
 print("gui.component ok")

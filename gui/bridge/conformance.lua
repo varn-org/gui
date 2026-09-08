@@ -5,7 +5,8 @@ local M = {}
 --- The capabilities a renderer may declare, so a component needing one can fail loudly without it.
 M.capabilities = {
     "text", "image", "list", "scroll", "input", "video", "webview", "canvas",
-    "picker", "datepicker", "haptics", "safearea", "fontBytes",
+    "picker", "datepicker", "haptics", "safearea", "fontBytes", "imageBytes",
+    "audio", "map", "location", "gradient", "blur",
 }
 
 local function tree(renderer)
@@ -187,6 +188,23 @@ M.cases = {
         end,
     },
     {
+        name = "measures a string with what it will be drawn with",
+        run = function(renderer)
+            local plain = renderer:measureText("spacing", { fontSize = 16 }, nil)
+            local spaced = renderer:measureText("spacing", { fontSize = 16, letterSpacing = 4 }, nil)
+
+            assert(spaced.width > plain.width,
+                "space asked for between letters is space the line needs, got "
+                    .. spaced.width .. " against " .. plain.width)
+
+            local tall = renderer:measureText("spacing", { fontSize = 16, lineHeight = 3 }, nil)
+
+            assert(tall.height > plain.height,
+                "and space asked for between lines is space the paragraph needs, got "
+                    .. tall.height .. " against " .. plain.height)
+        end,
+    },
+    {
         name = "reports an event as what the event carries",
         run = function(renderer)
             renderer:apply({
@@ -224,6 +242,21 @@ M.cases = {
             assert(radios[1].props.selected == true, "the chosen radio must be the one marked selected")
             assert(radios[2].props.selected == false, "the other radio must be left alone")
             assert(radios[1].props.value == "monthly", "a radio keeps the value it reports when chosen")
+        end,
+    },
+    {
+        name = "reports a chosen day as a day rather than an instant",
+        run = function(renderer)
+            renderer:apply({
+                { op = "create", id = 1, type = "datepicker", props = { value = "2026-09-05", onChange = function() end } },
+                { op = "insert", id = 1, parent = 0, index = 1 },
+                { op = "create", id = 2, type = "timepicker", props = { value = "09:30", onChange = function() end } },
+                { op = "insert", id = 2, parent = 0, index = 2 },
+            })
+
+            local pickers = tree(renderer)
+            assert(pickers[1].props.value == "2026-09-05", "a calendar takes the day it was given")
+            assert(pickers[2].props.value == "09:30", "and a clock the time it was given")
         end,
     },
     {

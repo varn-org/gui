@@ -2,7 +2,6 @@ local M = {}
 
 local ELEMENT = {}
 
-M.marker = ELEMENT
 
 --- Answers whether a value is an element rather than a prop or a plain table.
 function M.isElement(value)

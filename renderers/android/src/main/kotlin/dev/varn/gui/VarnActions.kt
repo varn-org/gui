@@ -17,36 +17,37 @@ object VarnActions {
 
         "blur" -> {
             view.clearFocus()
-            val manager = view.context.getSystemService(InputMethodManager::class.java)
-            manager?.hideSoftInputFromWindow(view.windowToken, 0)
+            hideKeyboard(view)
             true
         }
 
         "scrollTo" -> {
-            val x = (arguments.optDouble("x", 0.0) * density).toFloat()
-            val y = (arguments.optDouble("y", 0.0) * density).toFloat()
-            val animated = arguments.optBoolean("animated", false)
+            val surface = view as? VarnCollectionView
+                ?: throw VarnRendererException("scrollTo needs a scrolling view")
 
-            if (view is VarnCollectionView) {
-                view.scrollTo(x, y, animated)
-            } else {
-                view.scrollTo(x.toInt(), y.toInt())
-            }
+            surface.scrollTo(
+                (arguments.optDouble("x", 0.0) * density).toFloat(),
+                (arguments.optDouble("y", 0.0) * density).toFloat(),
+                arguments.optBoolean("animated", false),
+            )
 
             true
         }
 
-        "play" -> {
-            (view as? VideoView)?.start()
-            true
-        }
+        "play", "pause" -> {
+            val video = view as? VideoView ?: throw VarnRendererException("$method needs a video")
 
-        "pause" -> {
-            (view as? VideoView)?.pause()
+            if (method == "play") video.start() else video.pause()
             true
         }
 
         else -> throw VarnRendererException("the renderer has no action named $method")
+    }
+
+    /** Takes the keyboard away, whatever it was brought up by. */
+    fun hideKeyboard(view: View) {
+        val manager = view.context.getSystemService(InputMethodManager::class.java)
+        manager?.hideSoftInputFromWindow(view.windowToken, 0)
     }
 }
 

@@ -169,4 +169,105 @@ do
     assert(not ok, "a cycle in a prop must be refused")
 end
 
+
+-- What the system draws its bars over is the tree's to fill, so a bar can run all the way up.
+do
+    local renderer = gui.headless()
+    local app = gui.start(gui.SafeArea {
+        style = { grow = 1, background = "#111111ff" },
+        barStyle = { background = "#0b0b0fff" },
+        barContent = "light",
+        gui.Text { text = "content" },
+    }, renderer, {
+        size = { width = 390, height = 844 },
+        insets = { top = 47, right = 0, bottom = 34, left = 0 },
+    })
+
+    for _ = 1, 6 do
+        if not app:needsCommit() then
+            break
+        end
+
+        app:commit()
+    end
+
+    local strips = {}
+    local said = nil
+
+    for _, node in pairs(renderer.nodes) do
+        if node.frame ~= nil and node.props.style ~= nil and node.props.style.background == "#0b0b0fff" then
+            strips[#strips + 1] = node.frame
+        end
+
+        if node.props.barContent ~= nil then
+            said = node.props.barContent
+        end
+    end
+
+    assert(#strips == 2, "both strips the system draws over are filled, got " .. #strips)
+
+    table.sort(strips, function(first, second) return first.y < second.y end)
+
+    assert(strips[1].y == 0 and strips[1].height == 47, "the top strip covers the inset the platform reported")
+    assert(strips[2].y == 810 and strips[2].height == 34, "and the bottom one covers its own")
+    assert(said == "light", "how the system draws its own content crosses to the renderer")
+end
+
+-- A screen that says nothing about the bars pins nothing, so the platform draws them from the appearance.
+--
+-- A tree that names one is naming it for both appearances, and the sample named `light` — which read
+-- correctly in the dark and put white glyphs on the white bar the light appearance turned it into.
+do
+    local renderer = gui.headless()
+    local app = gui.start(gui.SafeArea {
+        style = { grow = 1, background = "surface" },
+        barStyle = { background = "background" },
+        gui.Text { text = "content" },
+    }, renderer, {
+        size = { width = 390, height = 844 },
+        insets = { top = 47, right = 0, bottom = 34, left = 0 },
+    })
+
+    for _ = 1, 6 do
+        if not app:needsCommit() then
+            break
+        end
+
+        app:commit()
+    end
+
+    for _, node in pairs(renderer.nodes) do
+        assert(node.props.barContent == nil,
+            "a screen that named nothing must pin nothing, sent " .. tostring(node.props.barContent))
+    end
+end
+
+-- A safe area told nothing about the bars fills nothing, rather than painting a strip nobody asked for.
+do
+    local renderer = gui.headless()
+    local app = gui.start(gui.SafeArea { style = { grow = 1 }, gui.Text { text = "content" } }, renderer, {
+        size = { width = 390, height = 844 },
+        insets = { top = 47, right = 0, bottom = 34, left = 0 },
+    })
+
+    for _ = 1, 6 do
+        if not app:needsCommit() then
+            break
+        end
+
+        app:commit()
+    end
+
+    local boxes = 0
+
+    for _, node in pairs(renderer.nodes) do
+        if node.type == "view" then
+            boxes = boxes + 1
+        end
+    end
+
+    assert(boxes == 1, "a safe area told nothing about the bars draws one box, got " .. boxes)
+end
+
+
 print("gui.environment ok")

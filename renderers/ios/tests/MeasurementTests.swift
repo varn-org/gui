@@ -75,11 +75,25 @@ final class MeasurementTests: XCTestCase {
     /// the box it was given, so what each of them is worth is checked here rather than assumed.
     func testControlsAreWorthWhatTheEngineIsToldTheyAre() {
         for type in ["switch", "slider", "stepper", "segmented", "datepicker", "timepicker", "colorpicker"] {
-            let answered = renderer.measureControl(type)
+            let answered = renderer.measureControl(type, variant: nil)
 
             XCTAssertGreaterThan(answered["height"] ?? 0, 0, "\(type) must be worth a height to the engine")
-            XCTAssertEqual(renderer.measureControl(type)["width"], answered["width"],
+            XCTAssertEqual(renderer.measureControl(type, variant: nil)["width"], answered["width"],
                            "\(type) must be worth the same thing every time it is asked")
+        }
+    }
+
+    /// A wheel and a compact date are two different controls to lay out, and asking about the type alone
+    /// answers for whichever one the factory makes by default. Stretched to whatever width was going, a
+    /// wheel is three columns of dates across a tablet and a screen that scrolls badly for it.
+    func testAWheelIsWorthWhatAWheelIsWorth() {
+        for type in ["datepicker", "timepicker"] {
+            let wheel = renderer.measureControl(type, variant: "wheel")
+            let compact = renderer.measureControl(type, variant: nil)
+
+            XCTAssertGreaterThan(wheel["width"] ?? 0, 0, "a wheel is worth a width of its own")
+            XCTAssertGreaterThan(wheel["height"] ?? 0, compact["height"] ?? 0,
+                                 "and it is taller than the compact one, which is what a wheel is")
         }
     }
 
@@ -100,5 +114,30 @@ final class MeasurementTests: XCTestCase {
 
         let needed = label.sizeThatFits(CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)).height
         XCTAssertGreaterThanOrEqual(height, needed, "a wrapped measurement must carry every line it takes")
+    }
+
+    /// A control with no opinion about an axis says nothing about it, and fills the room it is given.
+    ///
+    /// Asking one to fit answers the smallest it can be drawn at, which is not an opinion: a slider
+    /// answered 37 points across and was laid out as a thumb with no track beside it.
+    func testAControlThatFillsItsRowMeasuresNothingAcross() {
+        let slider = renderer.measureControl("slider", variant: nil)
+
+        XCTAssertEqual(slider["width"], 0, "a slider fills the row it is in")
+        XCTAssertGreaterThan(slider["height"] ?? 0, 0, "and stands as tall as the platform draws one")
+
+        for name in ["segmented", "progress"] {
+            XCTAssertEqual(renderer.measureControl(name, variant: nil)["width"], 0, "a \(name) fills its row")
+        }
+    }
+
+    /// A control the platform sizes on both axes says so, or it would be stretched down a tablet.
+    func testAControlSizedByThePlatformMeasuresBothWays() {
+        for name in ["switch", "stepper", "activity", "datepicker"] {
+            let size = renderer.measureControl(name, variant: nil)
+
+            XCTAssertGreaterThan(size["width"] ?? 0, 0, "a \(name) is as wide as the platform draws one")
+            XCTAssertGreaterThan(size["height"] ?? 0, 0, "and as tall")
+        }
     }
 }

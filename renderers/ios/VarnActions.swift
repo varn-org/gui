@@ -19,12 +19,17 @@ enum VarnActions {
             scroll.setContentOffset(point, animated: arguments["animated"] as? Bool ?? false)
             return true
 
-        case "play":
-            (view as? VarnVideoView)?.player.play()
-            return true
+        case "play", "pause":
+            guard let video = view as? VarnVideoView else {
+                throw RendererError.missing("\(method) needs a video")
+            }
 
-        case "pause":
-            (view as? VarnVideoView)?.player.pause()
+            if method == "play" {
+                video.player.play()
+            } else {
+                video.player.pause()
+            }
+
             return true
 
         default:

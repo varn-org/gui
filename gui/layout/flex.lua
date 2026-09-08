@@ -27,6 +27,23 @@ local function resolveLength(value, basis)
     error("a length must be a number, a percentage or auto, got " .. tostring(value), 0)
 end
 
+--- The name each edge of each box property is written under, worked out once rather than per box.
+---
+--- Building these by concatenation is the hottest line in the engine: three properties by four edges is
+--- twelve names built for every box on every pass, and a rotation lays the tree out on every frame.
+local EDGE_NAMES = {}
+
+for _, name in ipairs({ "margin", "padding", "border" }) do
+    local named = { horizontal = name .. "Horizontal", vertical = name .. "Vertical" }
+
+    for index = 1, 4 do
+        local edge = EDGES[index]
+        named[index] = name .. edge:sub(1, 1):upper() .. edge:sub(2)
+    end
+
+    EDGE_NAMES[name] = named
+end
+
 --- Reads a box property that may be given as one value, a pair, or a value per edge.
 local function readEdges(style, name)
     local box = { top = 0, right = 0, bottom = 0, left = 0 }
@@ -43,21 +60,22 @@ local function readEdges(style, name)
         box.left = whole[4] or whole.horizontal or box.right
     end
 
+    local named = EDGE_NAMES[name]
+
     for index = 1, 4 do
-        local edge = EDGES[index]
-        local specific = style[name .. edge:sub(1, 1):upper() .. edge:sub(2)]
+        local specific = style[named[index]]
         if specific ~= nil then
-            box[edge] = specific
+            box[EDGES[index]] = specific
         end
     end
 
-    local horizontal = style[name .. "Horizontal"]
+    local horizontal = style[named.horizontal]
     if horizontal ~= nil then
         box.left = horizontal
         box.right = horizontal
     end
 
-    local vertical = style[name .. "Vertical"]
+    local vertical = style[named.vertical]
     if vertical ~= nil then
         box.top = vertical
         box.bottom = vertical
@@ -136,27 +154,37 @@ local function readBox(node, parentWidth, parentHeight)
         children = {},
     }, Box)
 
+    -- What a type is never smaller than is a floor on the box, not on the text inside it. Applied to
+    -- the text it is the padding over again, so a badge showing one digit came out half as wide again
+    -- as the pill it is.
+    local natural = node.natural
+
+    if natural ~= nil then
+        if natural.minWidth ~= nil then
+            box.minWidth = math.max(box.minWidth or 0, natural.minWidth)
+        end
+
+        if natural.minHeight ~= nil then
+            box.minHeight = math.max(box.minHeight or 0, natural.minHeight)
+        end
+    end
+
     box.rowGap = style.rowGap or box.gap
     box.columnGap = style.columnGap or box.gap
+    box.row = isRow(box.direction)
+    box.answers = { count = 0, at = 0 }
     box.declaredWidth = box.width
     box.declaredHeight = box.height
     return box
 end
 
-function Box:horizontalInsets()
-    return self.padding.left + self.padding.right + self.border.left + self.border.right
-end
-
-function Box:verticalInsets()
-    return self.padding.top + self.padding.bottom + self.border.top + self.border.bottom
-end
-
-function Box:outerMain(size)
+--- Answers the margin a box takes along the axis it is laid out on, which is space beside its size.
+function Box:outerMain()
     if isRow(self.parentDirection) then
-        return size + self.margin.left + self.margin.right
+        return self.margin.left + self.margin.right
     end
 
-    return size + self.margin.top + self.margin.bottom
+    return self.margin.top + self.margin.bottom
 end
 
 local build
@@ -189,7 +217,6 @@ build = function(node, parentWidth, parentHeight, measure)
     local children = node.children or {}
     for index = 1, #children do
         local child, childRebuilt = build(children[index], box.width, box.height, measure)
-        child.parent = box
         box.children[index] = child
         rebuilt = rebuilt or childRebuilt
     end
@@ -199,8 +226,13 @@ build = function(node, parentWidth, parentHeight, measure)
         rebuilt = true
     end
 
+    -- What a box worked out is worth nothing once anything under it has changed, and that is both the
+    -- last answer and every earlier one. A box is rebuilt afresh with none, so this is for the boxes
+    -- above it, which keep theirs and would otherwise hand back a size taken before the change.
     if rebuilt then
         box.laid = false
+        box.answers.count = 0
+        box.answers.at = 0
     end
 
     return box, rebuilt
@@ -248,22 +280,78 @@ local function intrinsic(box, availableWidth)
         height = height or size.height + vertical
     end
 
-    if natural ~= nil then
-        width = math.max(width or 0, natural.minWidth or 0)
-        height = math.max(height or 0, natural.minHeight or 0)
-    end
-
     return width or 0, height or 0
 end
 
 local layout
 local placeAbsolute
 
---- Answers whether a box already holds the result of exactly this question.
+--- How many answers a box keeps.
 ---
---- Sizing a container asks each child for its size, hands it a share and asks again, so a subtree is
---- visited several times per level and the cost of a deep tree compounds. Everything a pass reads is
---- listed here, so a repeat of the same question is answered by the state the first one left behind.
+--- Sharing out a row asks a child how large it is at each size it is considering, so one pass asks a
+--- single box ten different questions and a screen holds several such rows. At eight the ring threw away
+--- each answer before it was asked for again and every commit worked the whole subtree out afresh: a
+--- scroll on a tablet with a screen open cost 21.7 ms. Measured against the gallery, it falls to 9.4 at
+--- sixteen and 7.0 at thirty-two, and stops improving after that.
+local ANSWERS = 32
+
+--- Gives back the size a box was worked out to be for this question, whenever it was asked.
+---
+--- Only the size is restored. A container that hands one back still holds, below it, whatever some other
+--- question left there, so an answer given here stands on its own only while nothing reads further down.
+local function answered(box, availableWidth, availableHeight)
+    local held = box.answers
+
+    for index = 1, held.count do
+        local answer = held[index]
+
+        if answer.availableWidth == availableWidth
+            and answer.availableHeight == availableHeight
+            and answer.width == box.width
+            and answer.height == box.height
+            and answer.stretchWidth == box.stretchWidth
+            and answer.stretchHeight == box.stretchHeight then
+            box.measuredWidth = answer.measuredWidth
+            box.measuredHeight = answer.measuredHeight
+            box.contentWidth = answer.contentWidth
+            box.contentHeight = answer.contentHeight
+            return true
+        end
+    end
+
+    return false
+end
+
+local function remember(box)
+    local held = box.answers
+
+    held.at = held.at % ANSWERS + 1
+
+    if held.at > held.count then
+        held.count = held.at
+        held[held.at] = {}
+    end
+
+    local answer = held[held.at]
+
+    answer.availableWidth = box.laidAvailableWidth
+    answer.availableHeight = box.laidAvailableHeight
+    answer.width = box.width
+    answer.height = box.height
+    answer.stretchWidth = box.stretchWidth
+    answer.stretchHeight = box.stretchHeight
+    answer.measuredWidth = box.measuredWidth
+    answer.measuredHeight = box.measuredHeight
+    answer.contentWidth = box.contentWidth
+    answer.contentHeight = box.contentHeight
+end
+
+--- Answers whether a box was worked out for exactly this question the last time it was laid out.
+---
+--- Only the last one counts. Everything a box holds is worked out during its own layout, so answering
+--- an older question hands back a size while the boxes below it still hold what some other question
+--- produced — a stretched row whose text kept its natural width. `gui/tests/layout_test.lua` lays a
+--- tree out at several sizes and compares it with one that has never been laid out at all.
 local function settled(box, availableWidth, availableHeight)
     return box.laid
         and box.laidAvailableWidth == availableWidth
@@ -276,7 +364,8 @@ end
 
 local pass = 0
 
-local function settle(box, availableWidth, availableHeight)
+--- Records what this box was just worked out to be, which is what a repeat of the question is answered from.
+local function record(box, availableWidth, availableHeight)
     box.laid = true
     box.pass = pass
     box.laidAvailableWidth = availableWidth
@@ -287,6 +376,11 @@ local function settle(box, availableWidth, availableHeight)
     box.laidStretchHeight = box.stretchHeight
     box.laidMeasuredWidth = box.measuredWidth
     box.laidMeasuredHeight = box.measuredHeight
+end
+
+local function settle(box, availableWidth, availableHeight)
+    record(box, availableWidth, availableHeight)
+    remember(box)
 end
 
 --- Restores what a pass produced, since a caller is free to overwrite a size it was answered.
@@ -319,9 +413,33 @@ local function flowChildren(box)
     return flow, absolute
 end
 
+--- Answers how large a child is along the axis its container runs, as far as the child declares it.
+local function declaredMain(box, child)
+    if box.row then
+        return child.width
+    end
+
+    return child.height
+end
+
+--- Works out how large a box is, which is the whole of what the pass that hands out shares reads of it.
+---
+--- Sizing a container asks every child how large it is, shares out what is left and lays each one out
+--- for the share it was given, so asking is never what decides where anything below the child sits. An
+--- answer the child has given before therefore stands here, and the layout that follows it is what puts
+--- the boxes underneath in agreement with the size it was finally handed. Without this a subtree is
+--- walked twice per level and a deep tree costs what it holds raised to its own depth.
+local function measure(box, availableWidth, availableHeight)
+    if #box.children > 0 and answered(box, availableWidth, availableHeight) then
+        return
+    end
+
+    layout(box, availableWidth, availableHeight)
+end
+
 local function mainSizeOf(box, child, mainAvailable, crossAvailable)
-    local row = isRow(box.direction)
-    local declared = row and child.width or child.height
+    local row = box.row
+    local declared = declaredMain(box, child)
 
     if child.basis ~= nil and child.basis ~= "auto" then
         return resolveLength(child.basis, mainAvailable) or declared or 0
@@ -333,40 +451,65 @@ local function mainSizeOf(box, child, mainAvailable, crossAvailable)
 
     -- A child with no declared main size asks its content, which for a leaf is what it measures.
     if row then
-        layout(child, mainAvailable, child.height or crossAvailable)
+        measure(child, mainAvailable, child.height or crossAvailable)
         return child.measuredWidth
     end
 
-    layout(child, child.width or crossAvailable, mainAvailable)
+    measure(child, child.width or crossAvailable, mainAvailable)
     return child.measuredHeight
 end
 
 --- Answers whether the container decides this child's cross size rather than the child itself.
+--- Answers whether the container decides this child's cross size rather than the child itself.
+---
+--- A control the platform gave a size to keeps it. A switch is fifty-one points across because that is
+--- what a switch is, and one stretched down a tablet is a control drawn in the corner of a box the whole
+--- width of the pane, with every point of it answering a finger. A platform that has no opinion about an
+--- axis answers nothing for it, which is what a slider and a segmented control do, and those still fill
+--- the room they are given.
 local function stretches(box, child, row)
     local align = child.alignSelf or box.align
     if align ~= "stretch" then
         return false
     end
 
-    return row and child.height == nil or (not row) and child.width == nil
-end
+    local natural = child.node.natural
 
-local function crossSizeOf(box, child)
-    local declared = isRow(box.direction) and child.height or child.width
-    if declared ~= nil then
-        return declared
+    if natural ~= nil then
+        local given = row and natural.height or natural.width
+
+        if given ~= nil and given > 0 then
+            return false
+        end
     end
 
-    return isRow(box.direction) and child.measuredHeight or child.measuredWidth
+    if row then
+        return child.height == nil
+    end
+
+    return child.width == nil
+end
+
+--- Answers how large a child is across the axis its container runs along.
+---
+--- Written as one `and`/`or` this reads the width of a row's child whenever that child declares no
+--- height, since the `and` yields nil and the `or` takes the other branch. A cell of a fixed width in a
+--- row was then centred against its own width, which put every one of them above the row it belonged to.
+local function crossSizeOf(box, child)
+    if box.row then
+        return child.height or child.measuredHeight
+    end
+
+    return child.width or child.measuredWidth
 end
 
 local function distribute(box, line, available)
     local used = 0
     for index = 1, #line do
-        used = used + line[index].mainSize + line[index]:outerMain(0)
+        used = used + line[index].mainSize + line[index]:outerMain()
     end
 
-    local gap = isRow(box.direction) and box.columnGap or box.rowGap
+    local gap = box.row and box.columnGap or box.rowGap
     used = used + gap * math.max(0, #line - 1)
 
     local free = available - used
@@ -444,8 +587,16 @@ layout = function(box, availableWidth, availableHeight)
         return
     end
 
-    local horizontalInsets = box:horizontalInsets()
-    local verticalInsets = box:verticalInsets()
+    -- A leaf holds nothing below it, so any answer it has given may be given again. Recording it leaves
+    -- the box where a layout would have left it, this pass included, which is what says a frame has to
+    -- be sent for it.
+    if #box.children == 0 and answered(box, availableWidth, availableHeight) then
+        record(box, availableWidth, availableHeight)
+        return
+    end
+
+    local horizontalInsets = box.padding.left + box.padding.right + box.border.left + box.border.right
+    local verticalInsets = box.padding.top + box.padding.bottom + box.border.top + box.border.bottom
 
     local contentWidth = box.width ~= nil and box.width - horizontalInsets or (availableWidth and availableWidth - horizontalInsets)
     local contentHeight = box.height ~= nil and box.height - verticalInsets or (availableHeight and availableHeight - verticalInsets)
@@ -479,7 +630,7 @@ layout = function(box, availableWidth, availableHeight)
         return
     end
 
-    local row = isRow(box.direction)
+    local row = box.row
     local mainAvailable = row and contentWidth or contentHeight
     local crossAvailable = row and contentHeight or contentWidth
 
@@ -506,7 +657,7 @@ layout = function(box, availableWidth, availableHeight)
 
         for index = 1, #flow do
             local child = flow[index]
-            local extent = child.mainSize + child:outerMain(0)
+            local extent = child.mainSize + child:outerMain()
             local separator = #current > 0 and gap or 0
 
             if #current > 0 and used + separator + extent > mainAvailable then
@@ -618,7 +769,6 @@ layout = function(box, availableWidth, availableHeight)
 
         lineCrossSizes[lineIndex] = lineCross
         totalCross = totalCross + lineCross
-        line.free = free
     end
 
     totalCross = totalCross + crossGap * math.max(0, #lines - 1)
@@ -628,7 +778,7 @@ layout = function(box, availableWidth, availableHeight)
         local line = lines[lineIndex]
         local used = 0
         for index = 1, #line do
-            used = used + line[index].mainSize + line[index]:outerMain(0)
+            used = used + line[index].mainSize + line[index]:outerMain()
         end
 
         used = used + mainGap * math.max(0, #line - 1)
@@ -660,7 +810,7 @@ layout = function(box, availableWidth, availableHeight)
 
         local used = 0
         for index = 1, #line do
-            used = used + line[index].mainSize + line[index]:outerMain(0)
+            used = used + line[index].mainSize + line[index]:outerMain()
         end
 
         used = used + mainGap * math.max(0, #line - 1)
@@ -675,7 +825,10 @@ layout = function(box, availableWidth, availableHeight)
             local align = child.alignSelf or box.align
             local childCross = crossSizeOf(box, child)
 
-            if align == "stretch" and (row and child.height == nil or not row and child.width == nil) then
+            -- Whether a child is stretched is one question with one answer. Asked again here in its own
+            -- words it answered differently, so a control the platform had sized was left alone while it
+            -- was measured and stretched anyway when it was placed.
+            if stretches(box, child, row) then
                 childCross = lineCross - (row and (child.margin.top + child.margin.bottom) or (child.margin.left + child.margin.right))
                 if row then
                     child.measuredHeight = childCross
@@ -735,20 +888,22 @@ placeAbsolute = function(box, absolute)
 
         layout(child, child.stretchWidth or box.contentWidth, child.stretchHeight or box.contentHeight)
 
+        -- A margin moves a pinned box off the edge it is pinned to, which is how a box of a known size
+        -- is centred on one: pinned at half the width and pulled back by half its own.
         if left ~= nil then
-            child.x = left
+            child.x = left + child.margin.left
         elseif right ~= nil then
-            child.x = box.contentWidth - right - child.measuredWidth
+            child.x = box.contentWidth - right - child.measuredWidth - child.margin.right
         else
-            child.x = 0
+            child.x = child.margin.left
         end
 
         if top ~= nil then
-            child.y = top
+            child.y = top + child.margin.top
         elseif bottom ~= nil then
-            child.y = box.contentHeight - bottom - child.measuredHeight
+            child.y = box.contentHeight - bottom - child.measuredHeight - child.margin.bottom
         else
-            child.y = 0
+            child.y = child.margin.top
         end
     end
 end

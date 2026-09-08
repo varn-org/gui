@@ -23,12 +23,9 @@ enum VarnProps {
 
         case "horizontal":
             (view as? VarnCollectionView)?.setHorizontal((value as? Bool) ?? false)
-            (view as? VarnScrollView)?.setHorizontal((value as? Bool) ?? false)
 
         case "showsIndicator":
-            let shows = (value as? Bool) ?? true
-            (view as? UIScrollView)?.showsVerticalScrollIndicator = shows
-            (view as? UIScrollView)?.showsHorizontalScrollIndicator = shows
+            (view as? VarnCollectionView)?.setShowsIndicator((value as? Bool) ?? true)
 
         case "scrollEnabled":
             (view as? UIScrollView)?.isScrollEnabled = (value as? Bool) ?? true
@@ -41,9 +38,10 @@ enum VarnProps {
 
         case "text":
             (view as? UILabel)?.text = value as? String
+            (view as? VarnLabel)?.written = (value as? String) ?? ""
             (view as? VarnLabelView)?.label.text = value as? String
 
-        case "label", "initials":
+        case "label":
             (view as? VarnLabelView)?.label.text = value as? String
             (view as? VarnCheckView)?.label.text = value as? String
 
@@ -72,6 +70,10 @@ enum VarnProps {
         case "placeholder":
             (view as? UITextField)?.placeholder = value as? String
 
+            if let image = view as? UIImageView, image.image == nil, let path = value as? String {
+                image.image = UIImage(contentsOfFile: path)
+            }
+
         case "pointerEvents":
             view.isUserInteractionEnabled = (value as? String) != "none"
 
@@ -99,20 +101,111 @@ enum VarnProps {
         case "continuous":
             (view as? UISlider)?.isContinuous = (value as? Bool) ?? true
 
+        case "refreshing":
+            VarnRefresh.show((value as? Bool) ?? false, on: view)
+
+        case "display":
+            (view as? VarnDatePicker)?.preferredDatePickerStyle =
+                (value as? String) == "wheel" ? .wheels : .compact
+
+        case "keyboardDismissMode":
+            (view as? UIScrollView)?.keyboardDismissMode =
+                (value as? String) == "on-drag" ? .onDrag : .none
+
         case "tint":
+            (view as? VarnBlurView)?.setTint(value as? String)
             applyTint(value, to: view)
+
+        case "color":
+            applyControlColour(value, to: view)
+
+        case "barContent":
+            (view as? VarnSafeAreaView)?.setBarContent(value as? String)
+
+        case "kind":
+            (view as? VarnFilePicker)?.setKind(value as? String)
+
+        case "accept":
+            (view as? VarnFilePicker)?.setAccept(value as? [String] ?? [])
+
+        case "multiple":
+            (view as? VarnFilePicker)?.setMultiple((value as? Bool) ?? false)
+
+        case "maxBytes":
+            (view as? VarnFilePicker)?.setMaxBytes(Int(VarnValue.number(value) ?? 0))
+
+        case "colors":
+            (view as? VarnGradientView)?.setColors(value as? [Any] ?? [])
+
+        case "locations":
+            (view as? VarnGradientView)?.setLocations(value as? [Any])
+
+        case "direction":
+            (view as? VarnGradientView)?.setDirection(value as? String)
+
+        case "intensity":
+            (view as? VarnBlurView)?.setIntensity(CGFloat(VarnValue.number(value) ?? 0.85))
+
+        case "pinned":
+            (view as? VarnView)?.pin(value as? [String: Any])
+            view.superview?.bringSubviewToFront(view)
+            (view.superview?.superview as? VarnCollectionView)?.hold()
+
+        case "colors":
+            (view as? VarnGradientView)?.setColors(value as? [Any] ?? [])
+
+        case "locations":
+            (view as? VarnGradientView)?.setLocations(value as? [Any])
+
+        case "direction":
+            (view as? VarnGradientView)?.setDirection(value as? String)
+
+        case "intensity":
+            (view as? VarnBlurView)?.setIntensity(CGFloat(VarnValue.number(value) ?? 0.85))
+
+        case "pinned":
+            (view as? VarnView)?.pin(value as? [String: Any])
+            view.superview?.bringSubviewToFront(view)
+            (view.superview?.superview as? VarnCollectionView)?.hold()
+
+        case "center":
+            (view as? VarnMapView)?.setCenter(value as? [String: Any])
+
+        case "zoom":
+            (view as? VarnMapView)?.setZoom(VarnValue.number(value) ?? 14)
+
+        case "markers":
+            (view as? VarnMapView)?.setMarkers(value as? [[String: Any]] ?? [])
+
+        case "interactive":
+            (view as? VarnMapView)?.setInteractive((value as? Bool) ?? true)
+
+        case "watch":
+            (view as? VarnLocationView)?.setWatch((value as? Bool) ?? false)
+
+        case "accuracy":
+            (view as? VarnLocationView)?.setAccuracy(value as? String)
+
+        case "playing":
+            (view as? VarnAudioView)?.setPlaying((value as? Bool) ?? false)
+
+        case "position":
+            (view as? VarnAudioView)?.setPosition(VarnValue.number(value) ?? 0)
 
         case "muted":
             (view as? VarnVideoView)?.player.isMuted = (value as? Bool) ?? false
 
         case "volume":
             (view as? VarnVideoView)?.player.volume = Float(VarnValue.number(value) ?? 1)
+            (view as? VarnAudioView)?.setVolume(Float(VarnValue.number(value) ?? 1))
 
         case "rate":
             (view as? VarnVideoView)?.rate = Float(VarnValue.number(value) ?? 1)
+            (view as? VarnAudioView)?.setRate(Float(VarnValue.number(value) ?? 1))
 
         case "loop":
             (view as? VarnVideoView)?.loops = (value as? Bool) ?? false
+            (view as? VarnAudioView)?.setLoops((value as? Bool) ?? false)
 
         case "autoplay":
             (view as? VarnVideoView)?.autoplays = (value as? Bool) ?? false
@@ -170,6 +263,15 @@ enum VarnProps {
         case "animating":
             applyAnimating(value as? Bool ?? true, to: view)
 
+        case "size":
+            (view as? UIActivityIndicatorView)?.style = (value as? String) == "small" ? .medium : .large
+
+        case "thickness":
+            applyThickness(VarnValue.number(value) ?? 4, to: view)
+
+        case "indeterminate":
+            applyIndeterminate((value as? Bool) ?? false, to: view)
+
         case "minimum":
             (view as? UISlider)?.minimumValue = Float((value as? Double) ?? 0)
 
@@ -215,7 +317,6 @@ enum VarnProps {
         let extent = VarnValue.number(value) ?? 0
 
         (view as? VarnCollectionView)?.setContentExtent(extent)
-        (view as? VarnScrollView)?.setContentExtent(extent)
     }
 
     /// Shows what a picker holds, which is the label of the option the value names.
@@ -246,9 +347,7 @@ enum VarnProps {
         }
 
         if let picker = view as? VarnDatePicker {
-            if let text = value as? String, let date = ISO8601DateFormatter().date(from: text) {
-                picker.date = date
-            }
+            picker.choose(value as? String)
             return
         }
 
@@ -282,11 +381,28 @@ enum VarnProps {
             return
         }
 
-        if let field = view as? UITextField {
+        if let field = view as? VarnTextField {
             let text = value as? String
+
+            if field.echoed(text) {
+                return
+            }
+
             if field.text != text {
                 field.text = text
             }
+
+            field.written()
+            return
+        }
+
+        if let field = view as? UITextField {
+            let text = value as? String
+
+            if field.text != text {
+                field.text = text
+            }
+
             return
         }
 
@@ -317,6 +433,20 @@ enum VarnProps {
         }
     }
 
+    /// Paints the mark a control draws, which is what a colour on a control rather than on text means.
+    ///
+    /// A style's colour is the colour of a string. A control that draws a tick, a spinner or a bar
+    /// draws it in the colour the tree gave the control, and each of those was the platform's own.
+    private static func applyControlColour(_ value: Any?, to view: UIView) {
+        guard let colour = VarnStyle.color(value) else {
+            return
+        }
+
+        (view as? VarnCheckView)?.paint(colour)
+        (view as? UIActivityIndicatorView)?.color = colour
+        (view as? UIProgressView)?.progressTintColor = colour
+    }
+
     private static func applySource(_ value: Any?, to view: UIView, type: String) {
         guard let path = value as? String else {
             return
@@ -327,9 +457,55 @@ enum VarnProps {
             return
         }
 
-        if let video = view as? VarnVideoView, let url = URL(string: path) {
-            video.play(AVPlayerItem(url: url))
+        if let video = view as? VarnVideoView {
+            video.play(AVPlayerItem(url: url(of: path)))
         }
+    }
+
+    /// Answers a source as the url a player takes, whether it names a file or somewhere else entirely.
+    ///
+    /// Reading every source with `URL(string:)` leaves a bundled file with no scheme and nothing that
+    /// can be played, which is a video that never starts and says nothing about why.
+    private static func url(of path: String) -> URL {
+        if path.contains("://") {
+            return URL(string: path) ?? URL(fileURLWithPath: path)
+        }
+
+        return URL(fileURLWithPath: path)
+    }
+
+    /// Draws a bar at the thickness it was given, which UIKit has no property for.
+    ///
+    /// A progress view is a hairline whatever frame it is put in, so the height the tree asked for is
+    /// applied as a scale about its own middle.
+    private static func applyThickness(_ thickness: CGFloat, to view: UIView) {
+        guard let bar = view as? UIProgressView, bar.bounds.height > 0 else {
+            return
+        }
+
+        bar.transform = CGAffineTransform(scaleX: 1, y: thickness / bar.bounds.height)
+    }
+
+    /// A bar with no value of its own moves on its own, which is what waiting for an unknown looks like.
+    private static func applyIndeterminate(_ indeterminate: Bool, to view: UIView) {
+        guard let bar = view as? UIProgressView else {
+            return
+        }
+
+        bar.layer.removeAnimation(forKey: "varn.indeterminate")
+
+        guard indeterminate else {
+            return
+        }
+
+        let sweep = CABasicAnimation(keyPath: "progress")
+        sweep.fromValue = 0
+        sweep.toValue = 1
+        sweep.duration = 1.2
+        sweep.repeatCount = .infinity
+
+        bar.progress = 1
+        bar.layer.add(sweep, forKey: "varn.indeterminate")
     }
 
     private static func applyAnimating(_ animating: Bool, to view: UIView) {
@@ -460,7 +636,9 @@ enum VarnProps {
 
         switch event {
         case "onPress":
-            if let control = view as? UIControl {
+            if let map = view as? VarnMapView {
+                map.onPress = { at in reporter.report(at) }
+            } else if let control = view as? UIControl {
                 control.addTarget(reporter, action: #selector(VarnEventReporter.fired), for: .touchUpInside)
             } else {
                 view.isUserInteractionEnabled = true
@@ -475,25 +653,70 @@ enum VarnProps {
             (view as? UIControl)?.addTarget(reporter, action: #selector(VarnEventReporter.fired),
                                             for: [.touchUpInside, .touchUpOutside])
 
+        case "onSwipe":
+            view.isUserInteractionEnabled = true
+
+            for direction in [UISwipeGestureRecognizer.Direction.left, .right, .up, .down] {
+                let swipe = UISwipeGestureRecognizer(target: reporter,
+                                                     action: #selector(VarnEventReporter.swiped))
+                swipe.direction = direction
+                reporter.attach(swipe, to: view)
+            }
+
         case "onLongPress":
             view.isUserInteractionEnabled = true
             reporter.attach(UILongPressGestureRecognizer(target: reporter,
-                                                         action: #selector(VarnEventReporter.fired)), to: view)
+                                                         action: #selector(VarnEventReporter.held)), to: view)
 
         case "onChange", "onSelect":
             (view as? UIControl)?.addTarget(reporter, action: #selector(VarnEventReporter.changed), for: .valueChanged)
             (view as? UITextField)?.addTarget(reporter, action: #selector(VarnEventReporter.changed), for: .editingChanged)
+            (view as? VarnTextView)?.onChange = { typed in reporter.report(typed) }
             (view as? VarnChooserButton)?.onChoose = { chosen in reporter.report(chosen) }
             (view as? VarnRatingView)?.onChoose = { score in reporter.report(score) }
+            (view as? VarnLocationView)?.onChange = { fix in reporter.report(fix) }
+
+        case "onPick":
+            (view as? VarnFilePicker)?.onPick = { files in reporter.report(files) }
 
         case "onSubmit":
             (view as? UITextField)?.addTarget(reporter, action: #selector(VarnEventReporter.fired), for: .editingDidEndOnExit)
 
+        case "onFocus":
+            (view as? UITextField)?.addTarget(reporter, action: #selector(VarnEventReporter.fired), for: .editingDidBegin)
+            (view as? VarnTextView)?.onFocus = { reporter.fired() }
+
+        case "onBlur":
+            (view as? UITextField)?.addTarget(reporter, action: #selector(VarnEventReporter.fired), for: .editingDidEnd)
+            (view as? VarnTextView)?.onBlur = { reporter.fired() }
+
+        case "onRefresh":
+            VarnRefresh.onPull(view) { reporter.fired() }
+
         case "onScroll":
             (view as? VarnCollectionView)?.onScroll = { payload in reporter.report(payload) }
 
+        case "onScrollEnd":
+            (view as? VarnCollectionView)?.onScrollEnd = { payload in reporter.report(payload) }
+
+        case "onError":
+            (view as? VarnLocationView)?.onError = { problem in reporter.report(problem) }
+
+        case "onRegionChange":
+            (view as? VarnMapView)?.onRegionChange = { region in reporter.report(region) }
+
+        case "onMarkerPress":
+            (view as? VarnMapView)?.onMarkerPress = { marker in reporter.report(marker) }
+
+        case "onProgress":
+            (view as? VarnAudioView)?.onProgress = { at in reporter.report(at) }
+
+        case "onReady":
+            (view as? VarnAudioView)?.onReady = { about in reporter.report(about) }
+
         case "onEnd":
             (view as? VarnVideoView)?.onEnd = { reporter.fired() }
+            (view as? VarnAudioView)?.onEnd = { reporter.fired() }
 
         case "onCommit":
             (view as? UISlider)?.addTarget(reporter, action: #selector(VarnEventReporter.changed),
@@ -512,7 +735,7 @@ final class VarnEventReporter: NSObject {
     private let id: Int
     let event: String
     private let emit: VarnProps.EventSink
-    private var recognizer: UIGestureRecognizer?
+    private var recognizers: [UIGestureRecognizer] = []
 
     init(id: Int, event: String, emit: @escaping VarnProps.EventSink) {
         self.id = id
@@ -535,17 +758,17 @@ final class VarnEventReporter: NSObject {
     }
 
     func attach(_ recognizer: UIGestureRecognizer, to view: UIView) {
-        self.recognizer = recognizer
+        recognizers.append(recognizer)
         view.addGestureRecognizer(recognizer)
     }
 
     /// Takes back whatever this reporter was listening through, so nothing it reported through is left.
     func detach(from view: UIView) {
-        if let recognizer {
+        for recognizer in recognizers {
             view.removeGestureRecognizer(recognizer)
-            self.recognizer = nil
         }
 
+        recognizers = []
         (view as? UIControl)?.removeTarget(self, action: nil, for: .allEvents)
     }
 
@@ -557,8 +780,43 @@ final class VarnEventReporter: NSObject {
         emit(id, event, payload)
     }
 
+    /// Reports a long press once, when the finger has been held long enough for it to be one.
+    ///
+    /// A recogniser reports every state it passes through, so binding to it directly reported the same
+    /// press again when the finger moved and again when it was lifted.
+    @objc func held(_ recognizer: UIGestureRecognizer) {
+        guard recognizer.state == .began else {
+            return
+        }
+
+        emit(id, event, NSNull())
+    }
+
+    /// Reports a swipe by the way it went, which is what an item does something different for.
+    @objc func swiped(_ recognizer: UISwipeGestureRecognizer) {
+        let direction: String
+
+        switch recognizer.direction {
+        case .left: direction = "left"
+        case .right: direction = "right"
+        case .up: direction = "up"
+        case .down: direction = "down"
+        default: return
+        }
+
+        emit(id, event, ["direction": direction])
+    }
+
     @objc func changed(_ sender: Any) {
-        emit(id, event, VarnEventReporter.value(of: sender))
+        let payload = VarnEventReporter.value(of: sender)
+
+        // What a field says is what it is answered with a commit later, by which time the reader has
+        // typed again, so it remembers what it said and refuses to be written back to any of it.
+        if let field = sender as? VarnTextField, let text = payload as? String {
+            field.reported(text)
+        }
+
+        emit(id, event, payload)
     }
 
     private static func value(of sender: Any) -> Any {
@@ -568,7 +826,8 @@ final class VarnEventReporter: NSObject {
         if let segmented = sender as? UISegmentedControl { return segmented.selectedSegmentIndex + 1 }
         if let stepper = sender as? UIStepper { return stepper.value }
         if let check = sender as? VarnCheckView { return check.isChecked }
-        if let picker = sender as? VarnDatePicker { return ISO8601DateFormatter().string(from: picker.date) }
+        if let picker = sender as? VarnDatePicker { return picker.chosen }
+        if let well = sender as? UIColorWell { return VarnStyle.hex(well.selectedColor) }
         return NSNull()
     }
 }

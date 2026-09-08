@@ -64,9 +64,31 @@ A component is a table with a `render` that returns elements. `setState` marks i
 
 A commit is scheduled, never synchronous, so ten `setState` calls in one handler produce one diff.
 
+A tree also comes down. `Runtime:stop` unmounts it, which fires every `onUnmount` and so ends whatever each component had asked to happen later. Without that a screen that repeats something — a bar that fills and starts again — holds the engine's loop open for the life of the process, since a pending timer is a reason not to idle.
+
+### The moments a component is told about
+
+Being built and being seen are two different things, which is what iOS and Android both say and what a framework that only reports mounting cannot. A stack keeps the screen under the one on top, a tab bar keeps every tab, and a split view keeps the pane there is no room for, so a screen that has been built is not necessarily one a reader can see.
+
+| Moment | When |
+|---|---|
+| `onWillMount` | Before the first render, with nothing of it on screen yet. |
+| `onMount` | Once the batch that built it has been applied. |
+| `onWillAppear` | Before the batch that puts it on screen. |
+| `onAppear` | Once that batch has been applied. |
+| `onWillDisappear` | Before the batch that takes it off screen. |
+| `onDisappear` | Once that batch has been applied. |
+| `onUpdate` | After a commit that changed it, with the props it had before. |
+| `onWillUnmount` | Before it is taken out of the tree. |
+| `onUnmount` | Once it is out. |
+
+The `will` half runs against the tree as it stands and the other half is held until the batch has reached the platform, which is what makes "before" and "after" mean what they say. A component that was built out of sight hears nothing about appearing until it is shown, and one taken down while it was on screen goes from the screen first and is taken down after.
+
+Whether a subtree is on screen is not something it can work out for itself, so whatever is showing it says: `gui.Showing { value = ... }` marks everything under it. `NavigationStack` and `SplitView` do this for the screens and panes they hold, and anything else that keeps several things and shows one — a tab bar, a pager — does the same.
+
 ## Decision 5: a project is a zip
 
-An application is `app.lua`, a `theme.lua`, and the fonts and images it uses, inside one archive with a manifest. The archive is expanded once into a cache directory keyed by its content hash, and everything afterwards reads ordinary files.
+An application is `app.lua`, the fonts and images it uses, and whatever else it is written out of, inside one archive with a manifest. The archive is expanded once into a cache directory keyed by its content hash, and everything afterwards reads ordinary files.
 
 Fonts have to reach the platform as files on iOS and Android, and images decode fastest from a path, so an in-memory read would copy them to disk anyway. Expanding once makes that explicit and makes a second launch free.
 

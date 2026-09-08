@@ -22,7 +22,11 @@ function Renderer:apply(ops)
         elseif op.op == "update" then
             local node = self:expect(op.id)
             for key, value in pairs(op.props) do
-                node.props[key] = value ~= protocol.removed and value or nil
+                if value == protocol.removed then
+                    node.props[key] = nil
+                else
+                    node.props[key] = value
+                end
             end
         elseif op.op == "insert" or op.op == "move" then
             self:place(op)
@@ -151,27 +155,37 @@ local CONTROLS = {
     segmented = { width = 0, height = 32 },
     progress = { width = 0, height = 4 },
     activity = { width = 24, height = 24 },
-    datepicker = { width = 0, height = 44 },
-    timepicker = { width = 0, height = 44 },
+    datepicker = { width = 118, height = 44 },
+    timepicker = { width = 86, height = 44 },
     colorpicker = { width = 44, height = 32 },
+    ["datepicker/wheel"] = { width = 320, height = 216 },
+    ["timepicker/wheel"] = { width = 320, height = 216 },
 }
 
 --- Answers the size a control is drawn at, which is the one thing about it Lua cannot work out.
-function Renderer:measureControl(kind)
+function Renderer:measureControl(kind, variant)
+    if variant ~= nil then
+        return CONTROLS[kind .. "/" .. variant] or { width = 0, height = 0 }
+    end
+
     return CONTROLS[kind] or { width = 0, height = 0 }
 end
 
 --- Measures text the way a platform would, at a size a test can predict.
+---
+--- A string is measured with what it will be drawn with, so the space asked for between its letters and
+--- between its lines are both part of the answer, the way they are on every platform.
 function Renderer:measureText(text, style, bound)
     local size = style.fontSize or 15
-    local width = #text * size * 0.5
+    local line = size * (style.lineHeight or 1.35)
+    local width = #text * (size * 0.5 + (style.letterSpacing or 0))
 
     -- A bound of zero is a node that has not been measured yet, not a node with no room.
     if bound ~= nil and bound > 0 and width > bound then
-        return { width = bound, height = math.ceil(width / bound) * size * 1.35 }
+        return { width = bound, height = math.ceil(width / bound) * line }
     end
 
-    return { width = width, height = size * 1.35 }
+    return { width = width, height = line }
 end
 
 --- Builds a renderer that records what it is told instead of drawing it.

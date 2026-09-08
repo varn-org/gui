@@ -47,6 +47,7 @@ targets:
       path: Info.plist
       properties:
         CFBundleDisplayName: Varn GUI
+        NSLocationWhenInUseUsageDescription: The map example shows where you are.
         CFBundleShortVersionString: "1.0.0"
         CFBundleVersion: "1"
         UILaunchScreen: {}

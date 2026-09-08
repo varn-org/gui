@@ -6,11 +6,15 @@ local GROUPS = {
     { key = "inputs", title = "Inputs", module = "demos.inputs" },
     { key = "content", title = "Content", module = "demos.content" },
     { key = "drawing", title = "Drawing", module = "demos.drawing" },
+    { key = "place", title = "Maps and location", module = "demos.place" },
     { key = "lists", title = "Lists", module = "demos.lists" },
     { key = "layout", title = "Layout", module = "demos.layout" },
     { key = "feedback", title = "Feedback", module = "demos.feedback" },
     { key = "presentation", title = "Presentation", module = "demos.presentation" },
+    { key = "tabs", title = "Tabs", module = "demos.tabs" },
+    { key = "animation", title = "Animation", module = "demos.animation" },
     { key = "screens", title = "Real screens", module = "demos.screens" },
+    { key = "apps", title = "Whole applications", module = "demos.apps" },
 }
 
 local M = { groups = {} }

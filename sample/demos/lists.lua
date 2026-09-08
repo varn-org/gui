@@ -156,23 +156,41 @@ local Long = gui.component({
 
 local Rows = gui.component({
     name = "TableDemo",
+    state = { by = "name", order = "ascending" },
 
-    render = function()
+    sort = function(self, key)
+        if self.state.by ~= key then
+            self:setState({ by = key, order = "ascending" })
+            return
+        end
+
+        self:setState({ order = self.state.order == "ascending" and "descending" or "ascending" })
+    end,
+
+    render = function(self)
         return parts.Page {
             parts.Block {
                 title = "Columns, sorting and selection",
+                summary = "Press a heading to sort by it, and again to turn it around",
                 gui.Table {
-                    style = { height = 280 },
+                    style = { height = 320 },
+                    striped = true,
+                    sortBy = self.state.by,
+                    sortOrder = self.state.order,
+                    onSort = function(key) self:sort(key) end,
                     columns = {
                         { key = "name", title = "Name" },
                         { key = "kind", title = "Kind" },
+                        { key = "seeds", title = "Seeds", width = 64, align = "end" },
                     },
                     rows = {
-                        { name = "Apple", kind = "Pome" },
-                        { name = "Cherry", kind = "Drupe" },
-                        { name = "Grape", kind = "Berry" },
+                        { name = "Apple", kind = "Pome", seeds = 10 },
+                        { name = "Cherry", kind = "Drupe", seeds = 1 },
+                        { name = "Grape", kind = "Berry", seeds = 2 },
+                        { name = "Fig", kind = "Syconium", seeds = 900 },
+                        { name = "Peach", kind = "Drupe", seeds = 1 },
+                        { name = "Melon", kind = "Pepo", seeds = 300 },
                     },
-                    sortBy = "name",
                 },
             },
         }

@@ -32,6 +32,18 @@ local function childOf(renderer, node, index)
     return renderer.nodes[id]
 end
 
+--- Answers the row of dots a carousel says which page it is on with.
+local function indicatorOf(renderer)
+    for _, node in pairs(renderer.nodes) do
+        local style = node.props.style
+
+        if style ~= nil and style.position == "absolute" and style.justify == "center"
+            and style.direction == "row" then
+            return node
+        end
+    end
+end
+
 --- Answers the surface node a list rendered, which is the one a renderer scrolls.
 local function surfaceOf(renderer, kind)
     local found = renderer:findAll(kind or "list")
@@ -345,7 +357,13 @@ do
     runtime:commit()
 
     local pinned = childOf(renderer, surface, -1)
-    assert(pinned.props.style.top == 400, "the pinned header follows the edge")
+
+    -- The surface holds the header against its own scrolling, so what the tree sends is the range it is
+    -- held over rather than a position that is a commit behind the finger.
+    assert(pinned.props.pinned ~= nil, "the pinned header carries the range it is held over")
+    assert(pinned.props.pinned.from == 0, "from where its own header sits")
+    assert(pinned.props.pinned.to == 30 + 30 * 40, "to where the next section pushes it off")
+    assert(pinned.props.style.top == pinned.props.pinned.from, "and it is placed where it belongs")
 
     local labels = renderer:findAll("text")
     local titled = false
@@ -453,6 +471,158 @@ do
     assert(surface.props.paging == true, "a carousel pages")
     assert(surface.props.horizontal == true, "a carousel runs along x unless told otherwise")
     assert(childOf(renderer, surface, 2).props.style.left == 320, "each page starts where the last one ended")
+    assert(surface.props.showsIndicator == false, "a carousel says where it is with its dots, not a bar")
 end
 
-print("gui.list ok")
+-- The dots sit over the carousel rather than inside it, or they are only ever seen over its first page.
+do
+    local _, renderer = start(gui.Carousel {
+        style = { height = 220 },
+        data = rows(4),
+        itemExtent = 320,
+        renderItem = function(item) return gui.Text { text = item.label } end,
+    })
+
+    local surface = surfaceOf(renderer, "carousel")
+    local dots = indicatorOf(renderer)
+
+    assert(dots ~= nil, "a carousel of several pages must say which one is showing")
+    assert(dots.parent ~= surface.id,
+        "the dots must not be inside the surface, since everything inside it scrolls away")
+    assert(#dots.children == 4, "one dot a page, found " .. #dots.children)
+end
+
+-- A carousel of many pages draws a window of dots rather than one for each, which would not fit.
+do
+    local _, renderer = start(gui.Carousel {
+        style = { height = 220 },
+        data = rows(40),
+        itemExtent = 320,
+        renderItem = function(item) return gui.Text { text = item.label } end,
+    })
+
+    local dots = indicatorOf(renderer)
+
+    assert(dots ~= nil, "a carousel of many pages must still say which one is showing")
+    assert(#dots.children == 7, "forty pages are shown as a window of seven, found " .. #dots.children)
+end
+
+-- A carousel that plays itself starts over only when it was told it may.
+
+-- A grid holds its columns apart, which is the whole of what its spacing means.
+--
+-- The spacing only ever went into the row height, so a two column grid drew its pictures edge to edge:
+-- each column took exactly half the width and the halves touched.
+do
+    local _, renderer = start(gui.Grid {
+        style = { grow = 1 },
+        data = rows(6),
+        columns = 2,
+        spacing = 12,
+        rowExtent = 100,
+        renderItem = function(item) return gui.Text { text = item.label } end,
+    }, { width = 320, height = 480 })
+
+    -- A frame is relative to the node it sits inside, so where a cell's content actually lands is the
+    -- sum of the chain above it.
+    local function placed(node)
+        local x, y = node.frame.x, node.frame.y
+        local holder = renderer.nodes[node.parent]
+
+        while holder ~= nil and holder.frame ~= nil do
+            x = x + holder.frame.x
+            y = y + holder.frame.y
+            holder = renderer.nodes[holder.parent]
+        end
+
+        return { x = x, y = y, width = node.frame.width, height = node.frame.height }
+    end
+
+    local cells = {}
+
+    for _, node in pairs(renderer.nodes) do
+        if node.type == "text" and node.frame ~= nil then
+            cells[#cells + 1] = placed(node)
+        end
+    end
+
+    assert(#cells >= 2, "a grid of six must realise several cells")
+
+    table.sort(cells, function(first, second)
+        if first.y ~= second.y then
+            return first.y < second.y
+        end
+
+        return first.x < second.x
+    end)
+
+    local left = cells[1]
+    local right = cells[2]
+
+    assert(right.y == left.y, "the first two cells share a row")
+    assert(right.x - (left.x + left.width) == 12,
+        "and are held twelve apart, are " .. (right.x - (left.x + left.width)) .. " apart")
+
+    -- The outer edges keep whatever padding the grid itself was given, which is none here.
+    assert(left.x == 0, "the leading edge is the grid's own, is " .. left.x)
+    assert(right.x + right.width == 320, "and so is the trailing one, ends at " .. (right.x + right.width))
+end
+
+do
+    local async = require("async")
+
+    --- Answers whether the carousel was asked to go back to where it started.
+    local function wrapped(renderer)
+        for index = 1, #renderer.calls do
+            local call = renderer.calls[index]
+
+            if call.method == "scrollTo" and (call.arguments.x or 0) == 0 then
+                return true
+            end
+        end
+
+        return false
+    end
+
+    --- Plays a carousel that is sitting on its last page, and answers the renderer it played on.
+    local function played(spec)
+        local app, renderer = start(gui.Carousel(spec))
+        local surface = surfaceOf(renderer, "carousel")
+
+        app:dispatch(surface.id, "onScroll", { x = 2 * 320, y = 0 })
+        app:dispatch(surface.id, "onScrollEnd", { x = 2 * 320, y = 0 })
+
+        while app:needsCommit() do
+            app:commit()
+        end
+
+        renderer.calls = {}
+        async.sleep(60):await()
+
+        return renderer
+    end
+
+    async.run(function()
+        local held = played({
+            data = rows(3),
+            itemExtent = 320,
+            autoplay = true,
+            autoplayInterval = 10,
+            renderItem = function(item) return gui.Text { text = item.label } end,
+        })
+
+        assert(not wrapped(held), "without being told it may, it stops at the last page")
+
+        local looping = played({
+            data = rows(3),
+            itemExtent = 320,
+            autoplay = true,
+            autoplayInterval = 10,
+            loop = true,
+            renderItem = function(item) return gui.Text { text = item.label } end,
+        })
+
+        assert(wrapped(looping), "told it may loop, it comes back round to the first entry")
+        print("gui.list ok")
+    end)
+end

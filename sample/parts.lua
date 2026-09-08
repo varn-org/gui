@@ -1,3 +1,4 @@
+local chrome = require("gui.style.chrome")
 local gui = require("gui")
 
 local M = {}
@@ -28,13 +29,24 @@ function M.Block(spec)
         children[index] = spec[index]
     end
 
+    -- A block arrives rather than appearing, which is what a screen a reader is looking at does.
     return gui.View {
         key = spec.title,
         style = { gap = "sm" },
+        enter = { opacity = 0, transform = { translateY = 16 } },
+        transition = { duration = 260, easing = "easeOut" },
+
         gui.Text {
-            text = spec.title,
-            style = { fontSize = "caption", fontWeight = "700", color = "textMuted", textTransform = "uppercase" },
+            text = spec.title:upper(),
+            style = { fontSize = "caption", fontWeight = "700", color = "textMuted" },
         },
+
+        spec.summary ~= nil and gui.Text {
+            key = "summary",
+            text = spec.summary,
+            style = { fontSize = "footnote", color = "textMuted" },
+        } or false,
+
         gui.View { style = { gap = "sm" }, table.unpack(children) },
     }
 end
@@ -62,18 +74,38 @@ function M.Row(label, control)
     }
 end
 
---- A demo's own page: everything scrolls, with room at the edges and between the blocks.
+--- A demo's own page: everything scrolls, with the room at the edges the platform gives a screen.
+---
+--- A large screen keeps more room at its edges than a phone and caps how wide a page runs, since a line
+--- the width of a tablet is one a reader loses their place in.
+local Page = gui.component({
+    name = "Page",
+
+    render = function(self)
+        local surface = gui.environment:read(self)
+
+        return gui.ScrollView {
+            style = { grow = 1 },
+            contentStyle = {
+                gap = "lg",
+                padding = chrome.margin(surface.breakpoint),
+                maxWidth = chrome.readable,
+                width = "100%",
+                alignSelf = "center",
+            },
+            table.unpack(self.children),
+        }
+    end,
+})
+
 function M.Page(children)
-    return gui.ScrollView {
-        style = { grow = 1 },
-        contentStyle = { gap = "lg", padding = "md" },
-        table.unpack(children),
-    }
+    return Page(children)
 end
 
 --- A box that shows what a piece of layout is doing, in a colour and with a label inside it.
 function M.Swatch(text, style)
-    local box = { justify = "center", align = "center", background = "primary", radius = "sm", padding = "sm" }
+    local box = { justify = "center", align = "center", background = "primary", radius = "sm",
+        padding = "sm", minHeight = 44 }
 
     for key, value in pairs(style or {}) do
         box[key] = value

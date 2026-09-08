@@ -54,7 +54,7 @@ gui.color.readable("#3b6cff")
 
 ## Typography
 
-`fontFamily`, `fontSize`, `fontWeight`, `fontStyle`, `lineHeight`, `letterSpacing`, `textAlign`, `textDecoration` and `textTransform`.
+`fontFamily`, `fontSize`, `fontWeight`, `fontStyle`, `lineHeight`, `letterSpacing`, `textAlign` and `textDecoration`. There is no `textTransform`: changing the case of a string is one call in Lua, and a field that changed it would have to be applied where the text is drawn and again where it is measured, in each of three renderers.
 
 A custom family resolves to a font the manifest registered, which is described in [assets.md](assets.md).
 
@@ -82,7 +82,7 @@ A transform moves what is drawn rather than what is measured, so a node keeps th
 gui.View { style = { transform = { translateX = 4, rotate = 45, scale = 1.2 } } }
 ```
 
-The fields are `translateX`, `translateY`, `scale`, `scaleX`, `scaleY`, `rotate` in degrees, `skewX` and `skewY`. `scale` sets both axes unless one is given on its own. A field nobody knows what to do with is refused rather than ignored.
+The fields are `translateX`, `translateY`, `scale`, `scaleX`, `scaleY` and `rotate` in degrees. `scale` sets both axes unless one is given on its own. A field nobody knows what to do with is refused rather than ignored. There is no skew: Android's view system has none, so it could only ever have worked on two platforms out of three.
 
 ## Responsive values
 

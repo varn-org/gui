@@ -6,7 +6,8 @@ An application is a directory, and a `.vap` is that directory zipped. The same a
 gallery/
 ├── manifest.lua
 ├── app.lua
-├── screens/
+├── demos/
+├── apps/
 └── assets/
     ├── fonts/
     └── images/
@@ -88,10 +89,11 @@ assets/images/logo@3x.png
 ```
 
 ```lua
-gui.Image { source = "images/logo.png", resizeMode = "contain" }
+gui.Image { source = "logo.png", resizeMode = "contain" }
+gui.Image { source = "https://picsum.photos/id/1015/600/400", placeholder = "logo.png" }
 ```
 
-A remote image is fetched with the engine's http client and cached on disk.
+A remote image is fetched with the engine's http client into the archive's own cache, following the redirects every picture service answers with, and handed to the renderer as a local file. While it is on its way the `placeholder` is what is drawn, and it stays if the picture never comes. `onLoad` and `onError` are reported by the engine, since the engine is what fetched it.
 
 ## The framework itself
 

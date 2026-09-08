@@ -36,6 +36,7 @@ export class WebHost {
         this.container = container;
         this.running = false;
         this.keyboard = 0;
+        this.watching = new AbortController();
         this.onProblem = (problem) => this.show(problem);
     }
 
@@ -60,8 +61,8 @@ export class WebHost {
         });
 
         module.varnRegister("gui_measure_control", (json) => {
-            const { type } = JSON.parse(json);
-            return JSON.stringify(this.renderer.measureControl(type));
+            const { type, variant } = JSON.parse(json);
+            return JSON.stringify(this.renderer.measureControl(type, variant));
         });
 
         module.varnRegister("gui_invoke", (json) => {
@@ -106,6 +107,7 @@ export class WebHost {
 
     surface() {
         return {
+            platform: "web",
             width: this.container.clientWidth,
             height: this.container.clientHeight,
             scale: this.renderer.scale,
@@ -178,14 +180,15 @@ export class WebHost {
             safeArea: this.renderer.safeArea(),
         }));
 
-        new ResizeObserver(report).observe(this.container);
+        this.sizes = new ResizeObserver(report);
+        this.sizes.observe(this.container);
         report();
     }
 
     observeAppearance() {
         globalThis.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", () => {
             this.module.varnEmit("gui.appearance", JSON.stringify({ appearance: this.appearance() }));
-        });
+        }, { signal: this.watching.signal });
     }
 
     // A soft keyboard shrinks the visual viewport rather than the window, which is what the tree avoids.
@@ -204,8 +207,8 @@ export class WebHost {
             }
         };
 
-        viewport.addEventListener("resize", report);
-        viewport.addEventListener("scroll", report);
+        viewport.addEventListener("resize", report, { signal: this.watching.signal });
+        viewport.addEventListener("scroll", report, { signal: this.watching.signal });
     }
 
     // One tick per frame, on the thread that owns the interface, which is what keeps a scroll smooth
@@ -219,7 +222,14 @@ export class WebHost {
         requestAnimationFrame(() => this.pump());
     }
 
+    // What was set up to watch the page is given back, or it goes on reporting into an engine that has
+    // stopped answering.
     stop() {
+        this.module.varnEmit("gui.stop", "{}");
+        this.module.varnPoll();
+
         this.running = false;
+        this.sizes?.disconnect();
+        this.watching.abort();
     }
 }

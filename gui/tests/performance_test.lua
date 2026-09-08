@@ -75,6 +75,35 @@ do
         "a tree " .. DEPTH .. " deep measured its one string " .. watch.measurements .. " times")
 end
 
+-- A prop written as a literal is compared by what it says, whichever prop it is.
+--
+-- A style was, and the four props that carry a list of their own were not: an icon's drawing, a rich
+-- text's spans, a picker's options and a segmented control's segments are each built afresh by the
+-- render that names them, so every one of them was an update over the bridge on every commit for a node
+-- that had not changed at all. An index of twenty rows with a chevron each is twenty of those.
+do
+    local Literals = gui.component({
+        name = "Literals",
+        render = function()
+            return gui.View { style = { grow = 1, gap = 8 },
+                gui.Icon { name = "chevron-right", size = 16 },
+                gui.RichText { spans = { { text = "one" }, { text = "two", weight = "700" } } },
+                gui.SegmentedControl { segments = { "Day", "Week" }, selectedIndex = 1 },
+            }
+        end,
+    })
+
+    local watch = watched()
+    local runtime = start(Literals {}, watch)
+    local before = #watch.renderer.batches
+
+    runtime:markDirty(runtime.root)
+    runtime:commit()
+
+    assert(opsSince(watch, before) == 0,
+        "a tree built again from the same literals sent " .. opsSince(watch, before) .. " operations")
+end
+
 -- A render that produces the same tree reaches the platform with nothing at all.
 do
     local watch = watched()
@@ -187,6 +216,48 @@ do
     end
 
     assert(worst <= 12, "scrolling a uniform list one row sent as many as " .. worst .. " operations")
+end
+
+-- A scroll that puts nothing new on screen costs nothing at all.
+--
+-- A platform reports every pixel a finger moves and a commit lays the whole tree out, so a list that
+-- re-rendered for each of them would spend a frame's budget on a window that has not moved.
+do
+    local watch = watched()
+    local rows = {}
+
+    for index = 1, 500 do
+        rows[index] = { key = index, label = "Row " .. index }
+    end
+
+    local runtime = start(gui.List {
+        style = { grow = 1 },
+        data = rows,
+        itemExtent = 44,
+        keyExtractor = function(item) return item.key end,
+        renderItem = function(item) return gui.Text { text = item.label } end,
+    }, watch)
+
+    local instance = runtime.root.instance
+
+    instance:scrolled(instance.spec, { x = 0, y = 440 })
+    drain(runtime)
+
+    local before = #watch.renderer.batches
+
+    -- Ten reports a pixel apart, none of which reaches the next row.
+    for step = 1, 10 do
+        instance:scrolled(instance.spec, { x = 0, y = 440 + step })
+        drain(runtime)
+    end
+
+    assert(opsSince(watch, before) == 0,
+        "scrolling within one row sent " .. opsSince(watch, before) .. " operations")
+
+    instance:scrolled(instance.spec, { x = 0, y = 440 + 44 * 4 })
+    drain(runtime)
+
+    assert(opsSince(watch, before) > 0, "scrolling onto new rows must reach the renderer")
 end
 
 print("gui.performance ok")

@@ -27,16 +27,80 @@ enum VarnStyle {
         )
     }
 
+    /// Answers a colour as the eight hex digits every renderer reads one as, which is how one crosses back.
+    static func hex(_ color: UIColor?) -> Any {
+        guard let color else {
+            return NSNull()
+        }
+
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+
+        guard color.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
+            return NSNull()
+        }
+
+        let digit = { (part: CGFloat) in Int((part * 255).rounded()) }
+
+        return String(format: "#%02x%02x%02x%02x", digit(red), digit(green), digit(blue), digit(alpha))
+    }
+
     static func font(from style: [String: Any]) -> UIFont {
         let size = VarnValue.number(style["fontSize"]) ?? 15
         let weight = self.weight(style["fontWeight"])
+        let base = named(style["fontFamily"] as? String, size) ?? UIFont.systemFont(ofSize: size, weight: weight)
 
-        if let family = style["fontFamily"] as? String,
-           let descriptor = UIFont(name: family, size: size) {
-            return descriptor
+        guard (style["fontStyle"] as? String) == "italic" else {
+            return base
         }
 
-        return UIFont.systemFont(ofSize: size, weight: weight)
+        guard let slanted = base.fontDescriptor.withSymbolicTraits(.traitItalic) else {
+            return base
+        }
+
+        return UIFont(descriptor: slanted, size: size)
+    }
+
+    private static func named(_ family: String?, _ size: CGFloat) -> UIFont? {
+        guard let family else {
+            return nil
+        }
+
+        return UIFont(name: family, size: size)
+    }
+
+    /// Answers everything a string is drawn with, which is what it is measured with too.
+    ///
+    /// Spacing between letters and between lines change how much room a paragraph needs, so measuring
+    /// without them measures something the reader never sees.
+    static func attributes(from style: [String: Any]) -> [NSAttributedString.Key: Any] {
+        var attributes: [NSAttributedString.Key: Any] = [.font: font(from: style)]
+
+        if let spacing = VarnValue.number(style["letterSpacing"]), spacing != 0 {
+            attributes[.kern] = spacing
+        }
+
+        if (style["textDecoration"] as? String) == "underline" {
+            attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+        }
+
+        if (style["textDecoration"] as? String) == "line-through" {
+            attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+        }
+
+        guard let multiple = VarnValue.number(style["lineHeight"]), multiple > 0 else {
+            return attributes
+        }
+
+        let paragraph = NSMutableParagraphStyle()
+
+        paragraph.lineHeightMultiple = multiple
+        paragraph.alignment = alignment(style["textAlign"])
+        attributes[.paragraphStyle] = paragraph
+
+        return attributes
     }
 
     static func weight(_ value: Any?) -> UIFont.Weight {
@@ -155,11 +219,21 @@ enum VarnStyle {
             return
         }
 
+        if let label = view as? VarnLabel {
+            label.font = font(from: style)
+            label.textColor = foreground ?? .label
+            label.textAlignment = alignment(style["textAlign"])
+            label.insets = padding
+            label.typography = attributes(from: style)
+            applyLines(style, to: label)
+            return
+        }
+
         if let label = view as? UILabel {
             label.font = font(from: style)
             label.textColor = foreground ?? .label
             label.textAlignment = alignment(style["textAlign"])
-            label.numberOfLines = style["numberOfLines"] as? Int ?? 0
+            applyLines(style, to: label)
             return
         }
 
@@ -186,7 +260,19 @@ enum VarnStyle {
         }
     }
 
-    private static func alignment(_ value: Any?) -> NSTextAlignment {
+    /// Says how many lines a label may run to, leaving alone what it was already told.
+    ///
+    /// How many lines a paragraph runs to is a prop rather than part of a style, and props and styles
+    /// arrive in no order at all, so writing a default here took away what the prop had just set.
+    private static func applyLines(_ style: [String: Any], to label: UILabel) {
+        guard let lines = style["numberOfLines"] as? Int else {
+            return
+        }
+
+        label.numberOfLines = lines
+    }
+
+    static func alignment(_ value: Any?) -> NSTextAlignment {
         switch value as? String {
         case "center": return .center
         case "right": return .right
@@ -195,7 +281,11 @@ enum VarnStyle {
         }
     }
 
-    private static func applyTransform(_ value: Any?, to view: UIView) {
+    /// Places a node's transform, which is read again whenever the node's size changes.
+    ///
+    /// A travel written as a share of the node cannot be worked out until the layout has said how large
+    /// the node is, and a node is created before it is ever placed.
+    static func applyTransform(_ value: Any?, to view: UIView) {
         guard let transform = value as? [String: Any] else {
             view.transform = .identity
             return
@@ -205,8 +295,22 @@ enum VarnStyle {
             VarnValue.number(transform[name]) ?? fallback
         }
 
+        // A travel written as a percentage is a share of the node's own size, which is the only way a
+        // panel says it leaves by its own edge without the tree knowing how tall it turned out to be.
+        let travel = { (name: String, extent: CGFloat) -> CGFloat in
+            guard let written = transform[name] as? String,
+                  let percent = Double(written.replacingOccurrences(of: "%", with: "")) else {
+                return number(name, 0)
+            }
+
+            return extent * CGFloat(percent) / 100
+        }
+
         var result = CGAffineTransform.identity
-        result = result.translatedBy(x: number("translateX", 0), y: number("translateY", 0))
+        result = result.translatedBy(
+            x: travel("translateX", view.bounds.width),
+            y: travel("translateY", view.bounds.height)
+        )
         result = result.scaledBy(x: number("scaleX", 1), y: number("scaleY", 1))
         result = result.rotated(by: number("rotate", 0) * .pi / 180)
 

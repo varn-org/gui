@@ -6,15 +6,16 @@ import AVKit
 enum VarnViewFactory {
     static func make(type: String) -> UIView {
         switch type {
-        case "text", "richtext": return UILabel()
-        case "image", "icon": return UIImageView()
+        case "text", "richtext": return VarnLabel()
+        case "image": return UIImageView()
         case "button": return VarnButton()
         case "pressable": return VarnPressableView()
         case "textinput", "searchbar": return VarnTextField()
         case "textarea": return VarnTextView()
-        case "scroll": return VarnScrollView()
         case "keyboardavoiding": return VarnView()
-        case "list", "sectionlist", "grid", "carousel": return VarnCollectionView()
+        case "safearea": return VarnSafeAreaView()
+        // One scrolling surface serves every scrolling type, since the engine sends all of them the same thing.
+        case "scroll", "list", "sectionlist", "grid", "carousel": return VarnCollectionView()
         case "switch": return VarnSwitch()
         case "slider": return VarnSlider()
         case "stepper": return UIStepper()
@@ -22,18 +23,23 @@ enum VarnViewFactory {
         case "progress": return UIProgressView()
         case "activity": return UIActivityIndicatorView(style: .medium)
         case "video": return VarnVideoView()
+        case "audio": return VarnAudioView()
         case "webview": return WKWebView()
         case "canvas": return VarnCanvasView()
+        case "gradient": return VarnGradientView()
+        case "blur": return VarnBlurView()
+        case "map": return VarnMapView()
+        case "location": return VarnLocationView()
         case "divider": return VarnDividerView()
-        case "chip", "badge", "tooltip", "avatar": return VarnLabelView()
+        case "badge", "tooltip": return VarnLabelView()
         case "rating": return VarnRatingView()
         case "checkbox": return VarnCheckView(shape: .square)
         case "radio": return VarnCheckView(shape: .circle)
-        case "picker", "filepicker": return VarnChooserButton()
+        case "picker": return VarnChooserButton()
+        case "filepicker": return VarnFilePicker()
         case "datepicker": return VarnDatePicker(mode: .date)
         case "timepicker": return VarnDatePicker(mode: .time)
         case "colorpicker": return UIColorWell()
-        case "refresh": return UIActivityIndicatorView(style: .medium)
 
         // A box is what the rest are: the engine positions them and their style paints them.
         default: return VarnView()
@@ -46,18 +52,89 @@ enum VarnViewFactory {
             return collection.contentView
         }
 
-        if let scroll = view as? VarnScrollView {
-            return scroll.contentView
+        if let blur = view as? VarnBlurView {
+            return blur.contentView
         }
 
         return view
     }
 }
 
+/// A label whose text sits inside the padding the style gave it rather than against its own edge.
+///
+/// UIKit draws a label's text against its bounds, so a heading told to keep a margin drew flush against
+/// the side of the screen. The engine works padding into the frame, so what is left is to inset the
+/// text within it.
+final class VarnLabel: UILabel {
+    var insets: UIEdgeInsets = .zero {
+        didSet { setNeedsDisplay() }
+    }
+
+    /// What the string is drawn with beyond its font, which is what it is measured with as well.
+    var typography: [NSAttributedString.Key: Any] = [:] {
+        didSet { redraw() }
+    }
+
+    /// The string itself, kept apart from what draws it so that setting either one keeps the other.
+    var written: String = "" {
+        didSet { redraw() }
+    }
+
+    private func redraw() {
+        guard !typography.isEmpty else {
+            attributedText = nil
+            text = written
+            return
+        }
+
+        attributedText = NSAttributedString(string: written, attributes: typography)
+    }
+
+    override func drawText(in rect: CGRect) {
+        super.drawText(in: rect.inset(by: insets))
+    }
+
+    override var intrinsicContentSize: CGSize {
+        let size = super.intrinsicContentSize
+
+        return CGSize(
+            width: size.width + insets.left + insets.right,
+            height: size.height + insets.top + insets.bottom
+        )
+    }
+}
+
 /// The plain box everything else is built from, which draws a background and a border and nothing else.
 final class VarnView: UIView {
+    /// The range the surface holds this box against its leading edge over, which a header is given.
+    ///
+    /// A header placed from the tree follows a finger a commit late, which is a header drifting over the
+    /// rows it is meant to cover. The range is what the tree knows and the offset is what the surface
+    /// knows, so each says the part it has.
+    var pinned: (from: CGFloat, to: CGFloat)?
+
+    func pin(_ value: [String: Any]?) {
+        guard let value,
+              let from = VarnValue.number(value["from"]),
+              let to = VarnValue.number(value["to"]) else {
+            pinned = nil
+            return
+        }
+
+        pinned = (CGFloat(from), CGFloat(to))
+    }
+
+    /// Answers where it sits for an offset, which is against the edge until its range runs out.
+    func held(at offset: CGFloat) -> CGFloat {
+        guard let pinned else {
+            return offset
+        }
+
+        return min(max(offset, pinned.from), max(pinned.from, pinned.to - bounds.height))
+    }
+
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        VarnHit.through(super.hitTest(point, with: event), self)
+        VarnHit.into(super.hitTest(point, with: event), self, point, event)
     }
 }
 
@@ -76,9 +153,62 @@ enum VarnHit {
 
         return hit
     }
+
+    /// Answers the control itself for a finger that landed on something inside it that wants nothing.
+    ///
+    /// A plain view takes a touch on iOS whether or not it has any use for one, so an icon inside a tab
+    /// swallowed every press aimed at it: the bar looked right and answered nothing, and a reader who
+    /// happened to land beside the icon got through. Anything inside that answers a finger of its own
+    /// keeps it, and everything else hands the press to the control it is drawn in.
+    /// Answers a child drawn outside the box for a finger that landed on it.
+    ///
+    /// A view answers a touch only within its own bounds, so a child drawn past the edge of the box it
+    /// belongs to is seen and never pressed: the raised picture on a tab bar is drawn half above the bar
+    /// and nothing above the bar's own edge reached it. A box that clips its drawing clips its touches
+    /// with it, which is the one case where what is outside is not meant to be there at all.
+    static func into(_ hit: UIView?, _ view: UIView, _ point: CGPoint, _ event: UIEvent?) -> UIView? {
+        if let hit {
+            return through(hit, view)
+        }
+
+        guard !view.clipsToBounds, !view.isHidden, view.alpha > 0.01, view.isUserInteractionEnabled else {
+            return nil
+        }
+
+        for child in view.subviews.reversed() {
+            if let found = child.hitTest(view.convert(point, to: child), with: event) {
+                return found
+            }
+        }
+
+        return nil
+    }
+
+    static func claim(_ hit: UIView?, _ control: UIControl) -> UIView? {
+        guard let hit else {
+            return nil
+        }
+
+        if hit === control {
+            return control
+        }
+
+        var view: UIView? = hit
+
+        while view != nil, view !== control {
+            if view is UIControl || view is UIScrollView || view is WKWebView
+                || view?.gestureRecognizers?.isEmpty == false {
+                return hit
+            }
+
+            view = view?.superview
+        }
+
+        return control
+    }
 }
 
-/// A box that shows one line of text, which is what a chip, a badge and a tooltip each are.
+/// A box that shows one line of text, which is what a badge and a tooltip each are.
 ///
 /// The engine sizes it, so the label simply fills it and is centred inside.
 final class VarnLabelView: UIView {
@@ -106,53 +236,14 @@ final class VarnLabelView: UIView {
     }
 }
 
-/// A scrolling view whose content layer holds the children the engine placed inside it.
-///
-/// The engine measures how far the content reaches and sends it, so this decides nothing: it applies
-/// the extent along the axis it was told to scroll.
-final class VarnScrollView: UIScrollView {
-    private let content = VarnContentView()
-    private var horizontal = false
-    private var extent: CGFloat = 0
-
-    init() {
-        super.init(frame: .zero)
-        addSubview(content)
-    }
-
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    var contentView: UIView { content }
-
-    func setHorizontal(_ value: Bool) {
-        horizontal = value
-        resize()
-    }
-
-    func setContentExtent(_ value: CGFloat) {
-        extent = value
-        resize()
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        resize()
-    }
-
-    private func resize() {
-        let size = horizontal
-            ? CGSize(width: max(extent, bounds.width), height: bounds.height)
-            : CGSize(width: bounds.width, height: max(extent, bounds.height))
-
-        contentSize = size
-        content.frame = CGRect(origin: .zero, size: size)
-    }
-}
-
 final class VarnContentView: UIView {}
 
 /// A box that shows a mark and a label, which is what a checkbox and a radio each are.
 final class VarnCheckView: UIControl {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        VarnHit.claim(super.hitTest(point, with: event), self)
+    }
+
     enum Shape {
         case square
         case circle
@@ -175,7 +266,7 @@ final class VarnCheckView: UIControl {
         self.shape = shape
         super.init(frame: .zero)
         mark.contentMode = .scaleAspectFit
-        mark.tintColor = .systemBlue
+        mark.tintColor = .tintColor
         addSubview(mark)
         addSubview(label)
         addTarget(self, action: #selector(toggle), for: .touchUpInside)
@@ -183,6 +274,11 @@ final class VarnCheckView: UIControl {
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// Paints the tick, which is the tree's decision rather than the platform's own accent.
+    func paint(_ colour: UIColor) {
+        mark.tintColor = colour
+    }
 
     func setChecked(_ checked: Bool) {
         isChecked = checked
@@ -354,6 +450,40 @@ final class VarnDatePicker: UIDatePicker {
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// Answers what was chosen, which is a date, a time, or both, and never an instant.
+    ///
+    /// A picker chooses what a calendar or a clock shows, not a moment on a timeline. Reporting it as
+    /// an instant gives it a zone nobody chose, and reading it back in another one moves the day.
+    var chosen: String {
+        formatter.string(from: date)
+    }
+
+    /// Takes what a calendar or a clock shows, in the same form it reports one in.
+    func choose(_ text: String?) {
+        guard let text, let chosen = formatter.date(from: text) else {
+            return
+        }
+
+        date = chosen
+    }
+
+    private var formatter: DateFormatter {
+        let built = DateFormatter()
+
+        built.locale = Locale(identifier: "en_US_POSIX")
+        built.dateFormat = pattern
+
+        return built
+    }
+
+    private var pattern: String {
+        switch datePickerMode {
+        case .time: return "HH:mm"
+        case .dateAndTime: return "yyyy-MM-dd'T'HH:mm"
+        default: return "yyyy-MM-dd"
+        }
+    }
 }
 
 /// A button with no look of its own, since the style a commit carries is what paints it.
@@ -391,10 +521,15 @@ final class VarnPressableView: UIControl {
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         bounds.insetBy(dx: -slop, dy: -slop).contains(point)
     }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        VarnHit.claim(super.hitTest(point, with: event), self)
+    }
 }
 
 /// The platform's own answer to being pressed, which is the same one wherever it is given.
 enum VarnPress {
+
     static func show(_ pressed: Bool, on view: UIView) {
         let alpha: CGFloat = pressed ? 0.55 : 1
 
@@ -438,6 +573,36 @@ final class VarnTextField: UITextField, UITextFieldDelegate {
 
     var limit: Int?
 
+    private var said: [String] = []
+
+    /// Records what this field told the tree, which is what a commit later answers it with.
+    func reported(_ text: String) {
+        said.append(text)
+
+        if said.count > 64 {
+            said.removeFirst()
+        }
+    }
+
+    /// Answers whether a value is one this field itself produced since it was last written to.
+    ///
+    /// A tree answers a keystroke with the value it has just been told, and by the time that lands the
+    /// reader has typed two more: writing it back puts the field where it was and everything typed
+    /// since is gone, so "Are you there" arrives as "Are you r". Anything the field never said — a
+    /// draft cleared after sending, a field filled in from somewhere else — is a real change, and the
+    /// history starts again from there.
+    func echoed(_ text: String?) -> Bool {
+        guard let text else {
+            return false
+        }
+
+        return said.contains(text)
+    }
+
+    func written() {
+        said.removeAll()
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         delegate = self
@@ -451,6 +616,18 @@ final class VarnTextField: UITextField, UITextFieldDelegate {
         replacementString string: String
     ) -> Bool {
         VarnLimit.allows(field.text, range, string, limit)
+    }
+
+    /// Takes the keyboard away when the return key finishes, and leaves it up when it moves on.
+    ///
+    /// A field whose return key says `next` is one of several, so dismissing on it would put the
+    /// keyboard away between every question of a form.
+    func textFieldShouldReturn(_ field: UITextField) -> Bool {
+        if field.returnKeyType != .next {
+            field.resignFirstResponder()
+        }
+
+        return true
     }
 
     override func textRect(forBounds bounds: CGRect) -> CGRect {
@@ -467,6 +644,9 @@ final class VarnTextField: UITextField, UITextFieldDelegate {
 }
 final class VarnTextView: UITextView, UITextViewDelegate {
     var limit: Int?
+    var onFocus: (() -> Void)?
+    var onBlur: (() -> Void)?
+    var onChange: ((String) -> Void)?
 
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
@@ -477,6 +657,18 @@ final class VarnTextView: UITextView, UITextViewDelegate {
 
     func textView(_ text: UITextView, shouldChangeTextIn range: NSRange, replacementText: String) -> Bool {
         VarnLimit.allows(text.text, range, replacementText, limit)
+    }
+
+    func textViewDidChange(_ text: UITextView) {
+        onChange?(text.text ?? "")
+    }
+
+    func textViewDidBeginEditing(_ text: UITextView) {
+        onFocus?()
+    }
+
+    func textViewDidEndEditing(_ text: UITextView) {
+        onBlur?()
     }
 }
 
@@ -505,15 +697,17 @@ final class VarnDividerView: UIView {
 final class VarnVideoView: UIView {
     let player = AVPlayer()
     private let layerView = AVPlayerLayer()
-    private let poster = UIImageView()
-    private let controls = AVPlayerViewController()
+    let poster = UIImageView()
+    let controller = AVPlayerViewController()
+
+    private var readiness: NSKeyValueObservation?
 
     var rate: Float = 1
     var loops = false
     var autoplays = false
 
     var showsControls = true {
-        didSet { controls.view.isHidden = !showsControls }
+        didSet { controller.view.isHidden = !showsControls }
     }
 
     /// Called when the video reaches its end, unless it was told to start over instead.
@@ -522,15 +716,19 @@ final class VarnVideoView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         layerView.player = player
+        layerView.videoGravity = .resizeAspect
         layer.addSublayer(layerView)
 
+        controller.player = player
+        controller.showsPlaybackControls = true
+        controller.view.backgroundColor = .clear
+        controller.videoGravity = .resizeAspect
+
+        // The poster stands over the video layer until there is a frame to draw behind it.
         poster.contentMode = .scaleAspectFill
         poster.clipsToBounds = true
+        poster.isUserInteractionEnabled = false
         addSubview(poster)
-
-        controls.player = player
-        controls.showsPlaybackControls = true
-        addSubview(controls.view)
 
         NotificationCenter.default.addObserver(
             self,
@@ -546,6 +744,43 @@ final class VarnVideoView: UIView {
         NotificationCenter.default.removeObserver(self)
     }
 
+    /// Attaches the platform's own controls once there is a view controller to attach them to.
+    ///
+    /// An `AVPlayerViewController` whose view is added without containment never receives the callbacks
+    /// it lays itself out from, so it draws an opaque black rectangle over everything and shows no
+    /// controls at all. It belongs to whichever controller owns the surface, which is only knowable
+    /// once the view is in a window.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+
+        guard window != nil, controller.parent == nil, let owner = owningController() else {
+            return
+        }
+
+        owner.addChild(controller)
+        controller.view.frame = bounds
+
+        // The order from the bottom is the video, the poster standing over it, and the controls over
+        // both, so the play button is reachable while the still is still showing.
+        addSubview(controller.view)
+        controller.didMove(toParent: owner)
+        controller.view.isHidden = !showsControls
+    }
+
+    private func owningController() -> UIViewController? {
+        var responder: UIResponder? = self
+
+        while let next = responder?.next {
+            if let controller = next as? UIViewController {
+                return controller
+            }
+
+            responder = next
+        }
+
+        return nil
+    }
+
     /// Shows the still a video stands behind until it has something of its own to draw.
     func showPoster(at path: String?) {
         poster.image = path.flatMap { UIImage(contentsOfFile: $0) }
@@ -553,12 +788,33 @@ final class VarnVideoView: UIView {
     }
 
     /// Takes a new source, starting it straight away when it was told to.
+    ///
+    /// The poster stands over the player until there is a frame behind it, which is what the first
+    /// moment of a video that has not been asked to play yet looks like.
     func play(_ item: AVPlayerItem) {
+        VarnAudioSession.playback()
         player.replaceCurrentItem(with: item)
 
         if autoplays {
             player.playImmediately(atRate: rate)
             poster.isHidden = true
+            return
+        }
+
+        watchForFirstFrame(item)
+    }
+
+    private func watchForFirstFrame(_ item: AVPlayerItem) {
+        readiness?.invalidate()
+
+        readiness = item.observe(\.status) { [weak self] observed, _ in
+            guard observed.status == .readyToPlay else {
+                return
+            }
+
+            DispatchQueue.main.async {
+                self?.poster.isHidden = true
+            }
         }
     }
 
@@ -576,7 +832,7 @@ final class VarnVideoView: UIView {
         super.layoutSubviews()
         layerView.frame = bounds
         poster.frame = bounds
-        controls.view.frame = bounds
+        controller.view.frame = bounds
     }
 }
 
@@ -596,11 +852,14 @@ final class VarnCanvasView: UIView {
 
             switch op {
             case "fill", "stroke":
-                guard let points = command["path"] as? [[CGFloat]], points.count > 1 else { continue }
+                guard let points = command["path"] as? [[CGFloat]] else { continue }
+
+                let pairs = points.filter { $0.count >= 2 }
+                guard pairs.count > 1 else { continue }
 
                 let path = UIBezierPath()
-                path.move(to: CGPoint(x: points[0][0], y: points[0][1]))
-                for point in points.dropFirst() {
+                path.move(to: CGPoint(x: pairs[0][0], y: pairs[0][1]))
+                for point in pairs.dropFirst() {
                     path.addLine(to: CGPoint(x: point[0], y: point[1]))
                 }
 

@@ -163,4 +163,68 @@ do
     assert(count(ops, "remove") == 1, "a changed type must remove what it replaced")
 end
 
+-- A key is what says two nodes of the same type are different things, wherever the node sits.
+--
+-- A component's own root was compared on its type alone, so a component saying it is showing something
+-- else by changing the key was patched in place instead of replaced. Nothing about it was new, so
+-- nothing it declared to arrive from was ever applied: every overlay, every drawer and every pushed
+-- screen appeared in a single frame while the way out of them animated correctly.
+do
+    local gui = require("gui")
+
+    local Switching = gui.component({
+        name = "Switching",
+        state = { shown = false },
+        render = function(self)
+            if not self.state.shown then
+                return gui.View { key = "absent", style = { width = 0, height = 0 } }
+            end
+
+            return gui.View {
+                key = "present",
+                style = { width = 100, height = 100 },
+                enter = { opacity = 0 },
+                transition = { duration = 250, delay = 0, easing = { 0.4, 0, 0.2, 1 } },
+            }
+        end,
+    })
+
+    local renderer = gui.headless()
+    local runtime = gui.start(Switching {}, renderer, { size = { width = 390, height = 844 } })
+
+    for _ = 1, 4 do
+        if not runtime:needsCommit() then
+            break
+        end
+
+        runtime:commit()
+    end
+
+    local before = #renderer.batches
+
+    runtime.root.instance:setState({ shown = true })
+
+    for _ = 1, 4 do
+        if not runtime:needsCommit() then
+            break
+        end
+
+        runtime:commit()
+    end
+
+    local arrived = nil
+
+    for index = before + 1, #renderer.batches do
+        for _, op in ipairs(renderer.batches[index]) do
+            if op.op == "create" and op.props ~= nil and op.props.enter ~= nil then
+                arrived = op
+            end
+        end
+    end
+
+    assert(arrived ~= nil, "a root under a new key must be created, not patched into the old one")
+    assert(arrived.props.enter.opacity == 0, "and it must carry what it arrives from")
+    assert(arrived.props.transition ~= nil, "and how long the arrival takes")
+end
+
 print("gui.diff ok")

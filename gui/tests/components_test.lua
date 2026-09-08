@@ -149,4 +149,233 @@ do
     assert(#labels == 1 and labels[1].props.text == "inner", "the inner list realised its own cell")
 end
 
-print("gui.components ok")
+print("gui.badges ok")
+
+-- The reference page is what the declarations say, rather than what somebody remembered to write.
+--
+-- `docs/components.md` is generated from the declarations themselves, so a component added without
+-- regenerating it documents a library that no longer exists. Comparing the file against the generator
+-- is what keeps the page honest between the day it is written and the day somebody reads it.
+do
+    local async = require("async")
+    local fs = require("fs")
+    local reference = require("gui.tools.reference")
+
+    async.run(function()
+        local written = fs.readFile("docs/components.md"):await()
+        local generated = reference.render()
+
+        for line in generated:gmatch("[^\n]+") do
+            if line:find("^| `") ~= nil then
+                assert(written:find(line, 1, true) ~= nil,
+                    "docs/components.md is behind the declarations, missing:\n  " .. line)
+            end
+        end
+
+        for line in written:gmatch("[^\n]+") do
+            if line:find("^| `") ~= nil then
+                assert(generated:find(line, 1, true) ~= nil,
+                    "docs/components.md carries a row nothing declares any more:\n  " .. line)
+            end
+        end
+
+        print("gui.components ok")
+    end)
+end
+
+
+-- A count is held to the ceiling it was given, and written out by the engine rather than by a renderer.
+do
+    local renderer = gui.headless()
+    local app = gui.start(
+        gui.View { style = { direction = "row" },
+            gui.Badge { key = "over", value = 128, max = 99 },
+            gui.Badge { key = "under", value = 3 },
+            gui.Badge { key = "dot", dot = true },
+        },
+        renderer,
+        { size = { width = 320, height = 200 } }
+    )
+
+    for _ = 1, 4 do
+        if not app:needsCommit() then
+            break
+        end
+
+        app:commit()
+    end
+
+    local said = {}
+
+    for _, node in pairs(renderer.nodes) do
+        if node.type == "badge" then
+            said[#said + 1] = node.props.text
+        end
+    end
+
+    table.sort(said)
+
+    assert(said[1] == "" and said[2] == "3" and said[3] == "99+",
+        "a badge says what it counts, held to its ceiling, got " .. table.concat(said, " "))
+end
+
+-- A control that draws its own text is as wide as that text plus its padding, counted once.
+--
+-- The padding was declared twice for the ones that draw their own — once as what the type is naturally worth and again
+-- in the style the renderer draws it with — and the engine added both. A badge showing a single digit
+-- came out 32 across and 24 tall for a pill that is 20 by 20, so it hung off whatever it was counting
+-- and covered the thing beside it.
+do
+    local function measured(node)
+        local renderer = gui.headless()
+        local runtime = gui.start(gui.View { style = { align = "start" }, node }, renderer,
+            { size = { width = 390, height = 844 } })
+
+        for _ = 1, 4 do
+            if not runtime:needsCommit() then
+                break
+            end
+
+            runtime:commit()
+        end
+
+        for _, found in pairs(renderer.nodes) do
+            if found.frame ~= nil and found.type ~= "view" then
+                return found, renderer
+            end
+        end
+    end
+
+    --- Answers what a control ought to measure: its own text, its own padding, and nothing else.
+    local function expected(node, renderer, text)
+        local style = node.props.style
+        local size = renderer:measureText(text, style, nil)
+        local padding = style.paddingHorizontal or 0
+
+        return size.width + padding * 2
+    end
+
+    local badge, renderer = measured(gui.Badge { value = 1 })
+
+    assert(badge.frame.width == 20 and badge.frame.height == 20,
+        "a badge of one digit is the pill it declares, is " .. badge.frame.width .. "x" .. badge.frame.height)
+
+    local many = measured(gui.Badge { value = 99 })
+
+    assert(many.frame.width == expected(many, renderer, "99"),
+        "and a wider count is that text plus its padding once, is " .. many.frame.width
+            .. " against " .. expected(many, renderer, "99"))
+
+    local tooltip = measured(gui.Tooltip { text = "Hi" })
+
+    assert(tooltip.frame.width == expected(tooltip, renderer, "Hi"),
+        "a tooltip is its text plus its padding once, is " .. tooltip.frame.width
+            .. " against " .. expected(tooltip, renderer, "Hi"))
+end
+
+-- A chip carries its label, and the mark that takes it away when there is somewhere to report that.
+--
+-- The gallery showed one labelled `Removable` that could not be removed: there was no such prop and no
+-- such event, so the label was a promise the component had never made.
+do
+    local removed = nil
+    local renderer = gui.headless()
+
+    local runtime = gui.start(gui.View { style = { align = "start" },
+        gui.Chip { label = "Tag", onRemove = function() removed = "Tag" end },
+        gui.Chip { key = "plain", label = "Plain" },
+    }, renderer, { size = { width = 390, height = 844 } })
+
+    for _ = 1, 4 do
+        if not runtime:needsCommit() then
+            break
+        end
+
+        runtime:commit()
+    end
+
+    local marks = renderer:findAll("canvas")
+
+    assert(#marks == 1, "only the chip with somewhere to report it carries a mark, found " .. #marks)
+
+    local remove = nil
+
+    for _, node in pairs(renderer.nodes) do
+        if node.type == "pressable" and node.props.accessibilityLabel == "Remove Tag" then
+            remove = node
+        end
+    end
+
+    assert(remove ~= nil, "the mark is something a finger can land on, and it is named")
+
+    remove.props.onPress()
+    assert(removed == "Tag", "pressing it must report the chip it takes away")
+
+    local labels = renderer:findAll("text")
+    local shown = {}
+
+    for index = 1, #labels do
+        shown[labels[index].props.text] = true
+    end
+
+    assert(shown["Tag"] and shown["Plain"], "both chips show what they are labelled")
+end
+
+-- A control the platform decorates carries no look of its own, or there are two backgrounds.
+--
+-- A compact date picker draws its own rounded pill. A box painted behind it is a second background
+-- around the first, wider than it and out of line with it, which is what a reader sees as a dark
+-- rectangle behind a control that already looked finished. The two go together: a control the platform
+-- answers a size for is a control the platform has drawn, and one the engine gives a bare height to is
+-- one the style paints.
+do
+    local renderer = gui.headless()
+
+    local function painted(node)
+        local runtime = gui.start(gui.View { style = { grow = 1 }, node }, renderer,
+            { size = { width = 390, height = 844 }, platform = "ios" })
+
+        for _ = 1, 4 do
+            if not runtime:needsCommit() then
+                break
+            end
+
+            runtime:commit()
+        end
+
+        for _, found in pairs(renderer.nodes) do
+            if found.frame ~= nil and found.type ~= "view" then
+                local style = found.props.style or {}
+                runtime:stop()
+                return found.type, style.background
+            end
+        end
+    end
+
+    for _, decorated in ipairs({
+        gui.DatePicker { value = "2026-09-17" },
+        gui.TimePicker { value = "09:30" },
+        gui.Switch { value = true },
+        gui.Slider { value = 0.5 },
+        gui.ColorPicker { value = "#3b82f6" },
+    }) do
+        local kind, background = painted(decorated)
+        local platform = renderer:measureControl(kind)
+
+        assert(platform.height > 0, "the platform must answer for a " .. kind .. ", which is what makes it one")
+        assert(background == nil,
+            "a " .. kind .. " is drawn by the platform, so nothing is painted behind it, painted "
+                .. tostring(background))
+    end
+
+    -- And a control the engine gives a bare height to is bare without one, so it keeps its look.
+    for _, plain in ipairs({
+        gui.TextInput { value = "" },
+        gui.Picker { options = { { value = "a", label = "A" } }, value = "a" },
+    }) do
+        local kind, background = painted(plain)
+
+        assert(background ~= nil, "a " .. kind .. " is drawn plain, so the style is what paints it")
+    end
+end
+

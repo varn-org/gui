@@ -134,7 +134,9 @@ class ControlsTest {
 
         view.updateDate(2026, 8, 5)
 
-        assertEquals(listOf("2026-09-05T00:00:00Z"), reported())
+        // A picker chooses what a calendar shows, not a moment on a timeline: an instant carries a zone
+        // nobody chose, and reading it back in another one moves the day.
+        assertEquals(listOf("2026-09-05"), reported())
     }
 
     @Test
@@ -144,7 +146,7 @@ class ControlsTest {
         view.hour = 9
         view.minute = 30
 
-        assertEquals("1970-01-01T09:30:00Z", reported().last())
+        assertEquals("09:30", reported().last())
     }
 
     @Test
@@ -160,5 +162,71 @@ class ControlsTest {
         )
 
         assertEquals(listOf(3), reported())
+    }
+
+    /**
+     * A field keeps what was typed while the tree catches up, and holds it in itself rather than a tag.
+     *
+     * A tree answers a keystroke with the value it has just been told, and by the time that lands the
+     * reader has typed two more, so "Are you there" arrived as "Are you r". A view tag needs a key that
+     * is an application resource id and throws on anything else, which is a crash a device finds and a
+     * test does not, so what the field remembers lives in the field.
+     */
+    @Test
+    fun `a field keeps what was typed while the tree catches up`() {
+        val field = control("textinput", mapOf("value" to "", "onChange" to true)) as VarnTextField
+
+        field.setText("Are")
+        field.setText("Are you")
+        field.setText("Are you there")
+
+        renderer.apply(
+            JSONArray(
+                listOf(
+                    JSONObject(mapOf("op" to "update", "id" to 1, "props" to JSONObject(mapOf("value" to "Are")))),
+                    JSONObject(
+                        mapOf("op" to "update", "id" to 1, "props" to JSONObject(mapOf("value" to "Are you"))),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals("nothing the field said is written back to it", "Are you there", field.text.toString())
+
+        renderer.apply(
+            JSONArray(
+                listOf(JSONObject(mapOf("op" to "update", "id" to 1, "props" to JSONObject(mapOf("value" to ""))))),
+            ),
+        )
+
+        assertEquals("and a value it never said is a real change", "", field.text.toString())
+    }
+
+    /**
+     * A field reports one keystroke once, however many times its handler has been bound.
+     *
+     * A watcher was added rather than set, so a handler that comes and goes — which a conditional one
+     * does on every commit that changes it — left the field reporting each keystroke once per binding.
+     */
+    @Test
+    fun `a field reports a keystroke once however often it was bound`() {
+        val field = control("textinput", mapOf("value" to "", "onChange" to true)) as VarnTextField
+
+        renderer.apply(
+            JSONArray(
+                listOf(
+                    JSONObject(
+                        mapOf("op" to "update", "id" to 1, "props" to JSONObject(mapOf("onChange" to true))),
+                    ),
+                    JSONObject(
+                        mapOf("op" to "update", "id" to 1, "props" to JSONObject(mapOf("onChange" to true))),
+                    ),
+                ),
+            ),
+        )
+
+        field.setText("a")
+
+        assertEquals("one keystroke is one report", 1, reported().size)
     }
 }

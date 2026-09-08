@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import platform
 import shutil
@@ -79,6 +80,25 @@ def _engine(args: argparse.Namespace) -> Path:
     return _download(args.version)
 
 
+def _shaped(path: Path) -> str:
+    """Answers what is wrong with how a test is written, or nothing when it is written correctly."""
+    source = path.read_text()
+    bodies = source.count("async.run(")
+
+    if bodies > 1:
+        return f"has {bodies} async.run bodies, and only the first of them is ever resumed"
+
+    said = [line for line in source.splitlines() if line.lstrip().startswith('print("gui.')]
+
+    if not said:
+        return "never says it finished, which is the only sign its body ran to the end"
+
+    if bodies == 1 and said[-1] == said[-1].lstrip():
+        return "says it finished outside its asynchronous body, so nothing awaited in it is checked"
+
+    return ""
+
+
 def test(args: argparse.Namespace) -> None:
     engine = _engine(args)
     suite = sorted(ROOT.glob("gui/tests/*_test.lua"))
@@ -91,12 +111,29 @@ def test(args: argparse.Namespace) -> None:
 
     failed = []
     for path in suite:
+        reason = _shaped(path)
+        if reason:
+            print(f"{path.name}: {reason}")
+            failed.append(path.name)
+            continue
+
         scratch = tempfile.mkdtemp(prefix="varn-gui-")
         environment = dict(os.environ, VARN_TEST_DIR=scratch)
-        result = subprocess.run([str(engine), str(path.relative_to(ROOT))], cwd=ROOT, env=environment)
+        result = subprocess.run(
+            [str(engine), str(path.relative_to(ROOT))],
+            cwd=ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+        )
         shutil.rmtree(scratch, ignore_errors=True)
 
-        if result.returncode != 0:
+        sys.stdout.write(result.stdout)
+        sys.stderr.write(result.stderr)
+
+        # A test says when it has finished. Anything after an await runs once the chunk has ended, so a
+        # body that dies there leaves the engine exiting cleanly and the test looking as if it passed.
+        if result.returncode != 0 or " ok" not in result.stdout:
             failed.append(path.name)
 
     print()
@@ -224,31 +261,57 @@ def doctor(args: argparse.Namespace) -> None:
 
 
 # Each screen the gallery is judged by, and the environment the sample reads to open it.
-DEMOS = [
-    "inputs/fields", "inputs/toggles", "inputs/sliders", "inputs/pickers", "inputs/buttons",
-    "content/text", "content/images", "content/media",
-    "drawing/canvas",
-    "lists/list", "lists/sections", "lists/grid", "lists/carousel", "lists/long", "lists/table",
-    "layout/flow", "layout/placing", "layout/avoiding", "layout/scrolling",
-    "feedback/progress", "feedback/labels",
-    "presentation/dialogs", "presentation/menus", "presentation/grouping",
-    "screens/form",
-]
+def _demos(engine: Path) -> list[str]:
+    """Answers every demo the gallery carries, asked of the gallery rather than kept in a list here."""
+    listing = subprocess.run(
+        [str(engine), "sample/list-demos.lua"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
-# Every screen the gallery is judged by, and the environment the sample reads to open it.
-SHOTS = [("index", {})] + [(name.replace("/", "-"), {"VARN_GUI_DEMO": name}) for name in DEMOS] + [
-    ("screens-network", {"VARN_GUI_DEMO": "screens/network", "VARN_GUI_DEMO_FETCH": "1"}),
-]
+    return [line for line in listing.stdout.split("\n") if "/" in line]
+
+
+def _simulator(device: str) -> str:
+    """Answers the simulator to work with, since xcodebuild names one by id where simctl takes `booted`."""
+
+    if device != "booted":
+        return device
+
+    listing = subprocess.run(
+        ["xcrun", "simctl", "list", "devices", "booted", "--json"],
+        capture_output=True, text=True, check=True,
+    )
+
+    for runtime, entries in json.loads(listing.stdout)["devices"].items():
+        for entry in entries:
+            if "iOS" in runtime:
+                return entry["udid"]
+
+    raise SystemExit("no simulator is booted: open one, or name it with --device")
 
 
 def shots(args: argparse.Namespace) -> None:
     """Take one screenshot per screen on the iOS simulator, so the chrome is looked at rather than argued about."""
-    device = args.device
+    device = _simulator(args.device)
     bundle = "dev.varn.gui.gallery"
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
 
     sample(args)
+
+    # Every screen the gallery is judged by, and the environment the sample reads to open it. A demo
+    # added to the catalogue is looked at without anything here being told about it.
+    shot_list = [("index", {})]
+    for name in _demos(_engine(args)):
+        wanted = {"VARN_GUI_DEMO": name}
+
+        if name == "screens/network":
+            wanted["VARN_GUI_DEMO_FETCH"] = "1"
+
+        shot_list.append((name.replace("/", "-"), wanted))
 
     project = ROOT / "apps" / "ios"
     subprocess.run(["xcodegen", "generate", "--quiet"], cwd=project, check=True)
@@ -272,7 +335,7 @@ def shots(args: argparse.Namespace) -> None:
     for appearance in ("light", "dark"):
         subprocess.run(["xcrun", "simctl", "ui", device, "appearance", appearance], check=True)
 
-        for name, wanted in SHOTS:
+        for name, wanted in shot_list:
             subprocess.run(["xcrun", "simctl", "terminate", device, bundle], check=False,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 

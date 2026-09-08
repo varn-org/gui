@@ -3,6 +3,24 @@ local natural = require("gui.layout.natural")
 
 local M = {}
 
+--- The whole surface, which is what anything shown over a screen is placed against.
+local COVER = { position = "absolute", left = 0, right = 0, top = 0, bottom = 0 }
+
+--- Answers a style that fills the surface, with whatever else the caller asked for on top of it.
+function M.cover(style)
+    local box = {}
+
+    for key, value in pairs(COVER) do
+        box[key] = value
+    end
+
+    for key, value in pairs(style or {}) do
+        box[key] = value
+    end
+
+    return box
+end
+
 --- What each component declares, keyed by the constructor a caller holds.
 ---
 --- The declaration is what refuses an unknown prop, and it is also what the reference page is built
@@ -27,9 +45,18 @@ local function guard(kind, declaration, build, host)
     allowed.ref = true
     allowed.testID = true
 
+    -- Anything on screen may arrive and change over time rather than all at once, so how it moves is
+    -- not a prop each type has to declare before it may be animated.
+    allowed.transition = true
+    allowed.enter = true
+
     -- Anything on screen can be named for a reader who cannot see it, so this is not a prop a component
     -- has to declare before it may be labelled.
     allowed.accessibilityLabel = true
+
+    -- Anything on screen may be told to let a finger through it, since what is drawn over a control is
+    -- not always meant to take the press aimed at it: a picture over the button that chose it is one.
+    allowed.pointerEvents = true
 
     local constructor = function(spec)
         spec = spec or {}

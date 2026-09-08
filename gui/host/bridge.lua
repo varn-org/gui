@@ -20,8 +20,8 @@ function Bridge:measureText(text, style, bound)
 end
 
 --- Asks the host what it draws a control at, since a control has a size of its own the way a string has.
-function Bridge:measureControl(kind)
-    return host.gui_measure_control({ type = kind })
+function Bridge:measureControl(kind, variant)
+    return host.gui_measure_control({ type = kind, variant = variant })
 end
 
 --- Reaches a node imperatively, which is what a ref calls through.
@@ -32,15 +32,6 @@ end
 --- Answers whether the host can do the named thing, which a component checks before asking for it.
 function Bridge:can(capability)
     return self.capabilities[capability] == true
-end
-
---- Refuses loudly when a component needs something this host has no answer for.
-function Bridge:require(capability, who)
-    if self:can(capability) then
-        return
-    end
-
-    error(who .. " needs " .. capability .. ", which this renderer does not provide", 0)
 end
 
 local function readCapabilities()
@@ -99,13 +90,25 @@ function M.run(description, options)
         insets = surface.safeArea,
         scale = surface.scale,
         appearance = surface.appearance,
+        platform = surface.platform,
         theme = options.theme,
         assets = options.assets,
+        pictures = options.pictures,
+        imageBytes = bridge.capabilities.imageBytes == true,
         onProblem = options.onProblem,
 
         -- A commit is posted to the loop the host already polls, so nothing has to tick across the bridge.
+        --
+        -- A render that fails there is on a coroutine of its own, so an error escaping it reaches the
+        -- engine's log and nowhere a reader can see, and the screen stops moving with nothing said.
         arrange = function(runtimeToCommit)
-            async.spawn(function() runtimeToCommit:commit() end)
+            async.spawn(function()
+                local ok, problem = pcall(runtimeToCommit.commit, runtimeToCommit)
+
+                if not ok then
+                    runtimeToCommit:report("the screen could not be drawn: " .. tostring(problem))
+                end
+            end)
         end,
     })
 
@@ -138,6 +141,10 @@ function M.run(description, options)
         app:commit()
     end)
 
+    host.on("gui.back", function()
+        app:goBack()
+    end)
+
     host.on("gui.keyboard", function(event)
         app:setKeyboard(event.height or 0)
         app:commit()
@@ -146,6 +153,12 @@ function M.run(description, options)
     host.on("gui.fontsRegistered", function()
         app:invalidateMeasurements()
         app:commit()
+    end)
+
+    -- A host that is finished with a surface says so, and the tree comes down: every screen hears it is
+    -- going, every timer a screen asked for ends, and everything a node opened is given back.
+    host.on("gui.stop", function()
+        app:stop()
     end)
 
     return app

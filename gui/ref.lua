@@ -8,10 +8,14 @@ function Ref:get()
     return self.current
 end
 
---- Calls an imperative action on the node, which is how a field is focused or a list scrolled.
+--- Calls an imperative action on the node, answering whether there was anything to call it on.
+---
+--- A ref is held across time — a timer that scrolls a list, a handler that focuses a field after an
+--- answer comes back — and by then the screen may have gone. That is life rather than a mistake, so an
+--- empty ref answers no, and `get` is there for a caller that wants to look first.
 function Ref:call(method, arguments)
     if self.current == nil then
-        error("the ref points at nothing, so " .. method .. " has nowhere to go", 2)
+        return false
     end
 
     return self.current.call(method, arguments)
@@ -27,6 +31,5 @@ function M.isRef(value)
     return getmetatable(value) == Ref
 end
 
-M.metatable = Ref
 
 return M

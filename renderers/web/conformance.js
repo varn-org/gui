@@ -59,7 +59,8 @@ function refuses(run, message) {
 
 export const CAPABILITIES = [
     "text", "image", "list", "scroll", "input", "video", "webview", "canvas",
-    "picker", "datepicker", "haptics", "safearea", "fontBytes",
+    "picker", "datepicker", "haptics", "safearea", "fontBytes", "imageBytes",
+    "audio", "map", "location", "gradient", "blur",
 ];
 
 export const CASES = [
@@ -225,6 +226,21 @@ export const CASES = [
         },
     },
     {
+        name: "measures a string with what it will be drawn with",
+        run(renderer) {
+            const plain = renderer.measureText("spacing", { fontSize: 16 }, 0);
+            const spaced = renderer.measureText("spacing", { fontSize: 16, letterSpacing: 4 }, 0);
+
+            assert(spaced.width > plain.width,
+                `space asked for between letters is space the line needs, got ${spaced.width} against ${plain.width}`);
+
+            const tall = renderer.measureText("spacing", { fontSize: 16, lineHeight: 3 }, 0);
+
+            assert(tall.height > plain.height,
+                `and space asked for between lines is space the paragraph needs, got ${tall.height} against ${plain.height}`);
+        },
+    },
+    {
         name: "reports an event as what the event carries",
         run(renderer) {
             const reported = [];
@@ -255,12 +271,30 @@ export const CASES = [
                 { op: "insert", id: 2, parent: 0, index: 2 },
             ]);
 
-            const chosen = renderer.nodes.get(1).element;
-            const other = renderer.nodes.get(2).element;
+            // A radio is a label holding the control and its caption, since a browser draws nothing
+            // inside a void element and the text written on one went nowhere at all.
+            const chosen = renderer.nodes.get(1).control;
+            const other = renderer.nodes.get(2).control;
 
             assert(chosen.checked === true, "the chosen radio must be the one marked selected");
             assert(other.checked === false, "the other radio must be left alone");
             assert(chosen.value === "monthly", "a radio keeps the value it reports when chosen");
+        },
+    },
+    {
+        name: "reports a chosen day as a day rather than an instant",
+        run(renderer) {
+            renderer.apply([
+                { op: "create", id: 1, type: "datepicker", props: { value: "2026-09-05", onChange: true } },
+                { op: "insert", id: 1, parent: 0, index: 1 },
+                { op: "create", id: 2, type: "timepicker", props: { value: "09:30", onChange: true } },
+                { op: "insert", id: 2, parent: 0, index: 2 },
+            ]);
+
+            // A picker chooses what a calendar or a clock shows, not a moment on a timeline: an
+            // instant carries a zone nobody chose, and reading it back in another one moves the day.
+            assert(renderer.nodes.get(1).element.value === "2026-09-05", "a calendar takes the day it was given");
+            assert(renderer.nodes.get(2).element.value === "09:30", "and a clock the time it was given");
         },
     },
     {

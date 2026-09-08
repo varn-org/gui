@@ -132,7 +132,74 @@ local Sliders = gui.component({
 
 local Pickers = gui.component({
     name = "PickersDemo",
-    state = { country = "pt", colour = "#3b82f6" },
+    state = { country = "pt", colour = "#3b82f6", when = nil, picked = nil },
+
+    --- Writes what was chosen where the engine can read it, and shows the pictures among it.
+    ---
+    --- A picker answers the bytes rather than a path, since where a chosen file belongs is the
+    --- application's to decide. This one puts them in a directory of its own and hands the paths to an
+    --- image, which is the whole of what showing a picked photograph takes.
+    keep = function(self, file)
+        self:after(0, function()
+            local crypto = require("crypto")
+            local fs = require("fs")
+            local entry = { name = file.name, size = file.size, type = file.type }
+
+            if file.bytes ~= nil then
+                entry.path = gui.storage.directory("picked") .. "/" .. file.name
+                fs.writeFile(entry.path, crypto.base64Decode(file.bytes)):await()
+            end
+
+            local kept = {}
+
+            for index = 1, #(self.state.picked or {}) do
+                kept[index] = self.state.picked[index]
+            end
+
+            kept[#kept + 1] = entry
+            self:setState({ picked = kept })
+        end)
+    end,
+
+    --- Says what was chosen, which is the whole of what a picker answers with.
+    chosen = function(self)
+        local files = self.state.picked
+
+        if files == nil or #files == 0 then
+            return "Nothing chosen yet"
+        end
+
+        local said = {}
+
+        for index = 1, #files do
+            local file = files[index]
+            local read = file.path ~= nil and "read" or "too large to read"
+
+            said[#said + 1] = file.name .. " — " .. file.size .. " bytes, " .. file.type .. ", " .. read
+        end
+
+        return table.concat(said, "\n")
+    end,
+
+    --- The pictures among what was chosen, shown from where they were written.
+    Pictures = function(self)
+        local shown = {}
+
+        for index = 1, #(self.state.picked or {}) do
+            local file = self.state.picked[index]
+
+            if file.path ~= nil and file.type:find("^image/") ~= nil then
+                shown[#shown + 1] = gui.Image {
+                    key = file.name,
+                    source = file.path,
+                    resizeMode = "cover",
+                    style = { width = 88, height = 88, radius = "md", background = "surface" },
+                }
+            end
+        end
+
+        return shown
+    end,
 
     render = function(self)
         return parts.Page {
@@ -151,8 +218,8 @@ local Pickers = gui.component({
 
             parts.Block {
                 title = "A date and a time",
-                parts.Field("Date", gui.DatePicker { value = "2026-09-05T00:00:00Z" }),
-                parts.Field("Time", gui.TimePicker { value = "2026-09-05T09:30:00Z" }),
+                parts.Field("Date", gui.DatePicker { value = "2026-09-05" }),
+                parts.Field("Time", gui.TimePicker { value = "09:30" }),
             },
 
             parts.Block {
@@ -161,7 +228,37 @@ local Pickers = gui.component({
                     value = self.state.colour,
                     onChange = function(value) self:setState({ colour = value }) end,
                 }),
-                gui.FilePicker { title = "Choose a file" },
+                gui.FilePicker {
+                    title = "Choose a file",
+                    accept = { "image/*", "application/pdf" },
+                    multiple = true,
+                    onPick = function(file) self:keep(file) end,
+                },
+
+                gui.FilePicker {
+                    title = "Choose pictures",
+                    kind = "image",
+                    multiple = true,
+                    onPick = function(file) self:keep(file) end,
+                },
+
+                gui.Text {
+                    text = self:chosen(),
+                    style = { fontSize = "footnote", color = "textMuted" },
+                },
+
+                gui.View { style = { direction = "row", wrap = true, gap = "sm" },
+                    table.unpack(self:Pictures()) },
+            },
+
+            parts.Block {
+                title = "A date, turned rather than typed",
+                summary = "The wheel people expect on a phone",
+                gui.DatePicker {
+                    display = "wheel",
+                    value = self.state.when,
+                    onChange = function(value) self:setState({ when = value }) end,
+                },
             },
         }
     end,

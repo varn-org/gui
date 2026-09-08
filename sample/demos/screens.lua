@@ -99,13 +99,15 @@ local Network = gui.component({
 
     --- Counts while a request is in flight, which is what shows the interface never froze waiting for it.
     tick = function(self)
-        if self.stopped or self.state.status ~= "loading" then
+        if self.stopped or self.ticking or self.state.status ~= "loading" then
             return
         end
 
+        self.ticking = true
         self:setState({ ticks = self.state.ticks + 1 })
-        require("async").spawn(function()
-            require("async").sleep(120):await()
+
+        self:after(120, function()
+            self.ticking = false
             self:tick()
         end)
     end,

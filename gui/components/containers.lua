@@ -1,8 +1,14 @@
+local animation = require("gui.style.animation")
+local chrome = require("gui.style.chrome")
+local icons = require("gui.style.icons")
 local collections = require("gui.components.collections")
 local feedback = require("gui.components.feedback")
 local component = require("gui.component")
+local visibility = require("gui.visibility")
 local content = require("gui.components.content")
 local input = require("gui.components.input")
+local presentation = require("gui.components.presentation")
+local environment = require("gui.environment")
 local structure = require("gui.components.structure")
 local support = require("gui.components.support")
 
@@ -15,9 +21,18 @@ local Text = content.Text
 local Pressable = input.Pressable
 
 --- The proportions the containers are built from, which are the ones the platforms themselves use.
-local BAR = 44
 local TAB = 56
 local HEADER = 48
+
+--- Where a screen sits while it is going, which is over the one it is uncovering.
+local COVERING = { position = "absolute", top = 0, right = 0, bottom = 0, left = 0 }
+
+--- Where a screen sits once another one has been pushed over it, which is exactly where it was.
+---
+--- It is held rather than shown. A screen is not required to be opaque, and one that is not lets what is
+--- under it through: pushing a product over a grid drew the grid's own rows through the product's price.
+--- Nothing below the top is drawn, so what shows is what the top screen draws and nothing else.
+local COVERED = { position = "absolute", top = 0, right = 0, bottom = 0, left = 0, opacity = 0 }
 
 --- Answers whether a section of an accordion is open, which is one key or a set of them.
 local function opened(expanded, key)
@@ -32,6 +47,17 @@ local function opened(expanded, key)
     end
 
     return expanded == key
+end
+
+--- Answers whether one value sorts before another, comparing numbers as numbers.
+---
+--- Comparing everything as text puts ten before nine, which is a table that looks sorted and is not.
+local function precedes(first, second)
+    if type(first) == "number" and type(second) == "number" then
+        return first < second
+    end
+
+    return tostring(first) < tostring(second)
 end
 
 --- Answers what the caller gave as the content of a section or a screen, ready to be a child.
@@ -111,7 +137,12 @@ M.Accordion = support.component("Accordion", {
                     end
                 end,
                 Text { text = section.title, numberOfLines = 1, style = { grow = 1, fontWeight = "600" } },
-                Text { text = open and "⌃" or "⌄", style = { color = "textMuted" } },
+                content.Icon {
+                    key = "mark",
+                    name = open and "chevron-up" or "chevron-down",
+                    size = 14,
+                    color = "textMuted",
+                },
             }
 
             if open then
@@ -194,7 +225,9 @@ local function waiting(counts, tab, index)
     return feedback.Badge {
         key = "badge",
         value = count,
-        style = { position = "absolute", top = 6, left = "56%" },
+        -- A badge hangs off the corner of what it counts. Placed at a share of the tab's width it moved
+        -- with the number of tabs and sat over the label it was meant to sit beside.
+        style = { position = "absolute", top = -10, right = -18 },
     }
 end
 
@@ -206,6 +239,12 @@ M.TabBar = support.component("TabBar", {
     validate = function(spec)
         if type(spec.tabs) ~= "table" or #spec.tabs == 0 then
             return "needs a tabs list with at least one entry"
+        end
+
+        for index = 1, #spec.tabs do
+            if spec.tabs[index].icon ~= nil and not icons.has(spec.tabs[index].icon) then
+                return "the icon set does not know an icon called " .. tostring(spec.tabs[index].icon)
+            end
         end
 
         local choices = { "top", "bottom" }
@@ -238,13 +277,22 @@ M.TabBar = support.component("TabBar", {
                         self.props.onChange(index)
                     end
                 end,
-                Text {
-                    text = tab.label,
-                    numberOfLines = 1,
-                    style = { fontSize = "caption", fontWeight = "600", color = tint, textAlign = "center" },
-                },
+                tab.icon ~= nil and content.Icon { key = "icon", name = tab.icon, size = 22, color = tint } or false,
 
-                waiting(self.props.badgeCounts, tab, index),
+                -- The label and what is waiting behind it are one box, so the badge hangs off the
+                -- corner of the word rather than off a corner of the whole tab.
+                View {
+                    key = "label",
+                    style = { align = "center", justify = "center" },
+
+                    Text {
+                        text = tab.label,
+                        numberOfLines = 1,
+                        style = { fontSize = "caption", fontWeight = "600", color = tint, textAlign = "center" },
+                    },
+
+                    waiting(self.props.badgeCounts, tab, index),
+                },
             }
         end
 
@@ -262,8 +310,8 @@ M.TabBar = support.component("TabBar", {
 
 --- The screen at the top of a stack, over a bar carrying its title and the way back to the one beneath.
 M.NavigationStack = support.component("NavigationStack", {
-    props = { "screens", "index", "title", "backTitle", "hidesBar", "barStyle" },
-    events = { "onPop", "onIndexChange" },
+    props = { "screens", "index", "title", "backTitle", "hidesBar", "barStyle", "actions" },
+    events = { "onPop", "onIndexChange", "onBack" },
     defaults = { index = 1, hidesBar = false },
     validate = function(spec)
         if type(spec.screens) ~= "table" or #spec.screens == 0 then
@@ -272,9 +320,47 @@ M.NavigationStack = support.component("NavigationStack", {
     end,
 }, component.define({
     name = "NavigationStack",
+    state = { leaving = nil, going = false },
+
+    --- Holds the screen that has just been left so it can be seen going, rather than cut.
+    ---
+    --- A caller derives its screens from what it is showing, so the one that was on top is gone from the
+    --- list by the time the stack renders again and there is nothing left to draw leaving. The stack is
+    --- the only thing that saw it, so it is the one that keeps it.
+    onUpdate = function(self, before)
+        -- It is put back where it was and told to go on the commit after, since a node born in the state
+        -- it is leaving in has never been anywhere else and there is nothing to animate.
+        if self.state.leaving ~= nil and not self.state.going then
+            self:setState({ going = true })
+            return
+        end
+
+        local depth = math.max(1, math.min(#self.props.screens, self.props.index or 1))
+        local was = math.max(1, math.min(#before.screens, before.index or 1))
+
+        if depth >= was then
+            return
+        end
+
+        local timing = animation.transition({ duration = "fast", easing = "easeOut" })
+
+        self:setState({ leaving = before.screens[was], going = false })
+        self:after(timing.duration * 2, function() self:setState({ leaving = component.none }) end)
+    end,
 
     pop = function(self)
-        local index = math.max(1, (self.props.index or 1) - 1)
+        -- A stack at its first screen may still have somewhere to go: the detail column of a split view
+        -- with no room for both is one, and so is any stack that is not the whole of the application.
+        if (self.props.index or 1) <= 1 then
+            if self.props.onBack == nil then
+                return false
+            end
+
+            self.props.onBack()
+            return true
+        end
+
+        local index = (self.props.index or 1) - 1
 
         if self.props.onPop ~= nil then
             self.props.onPop()
@@ -283,42 +369,82 @@ M.NavigationStack = support.component("NavigationStack", {
         if self.props.onIndexChange ~= nil then
             self.props.onIndexChange(index)
         end
+
+        return true
     end,
 
-    Bar = function(self, screen, index)
-        local children = {
-            View {
-                key = "title",
-                style = { position = "absolute", left = 0, right = 0, top = 0, bottom = 0,
-                    justify = "center", align = "center", paddingHorizontal = 64 },
-                Text {
-                    text = screen.title or self.props.title or "",
-                    numberOfLines = 1,
-                    style = { fontSize = "headline", fontWeight = "600", textAlign = "center" },
-                },
-            },
+    --- The way back, which carries the previous screen's name on a platform that names it.
+    Back = function(self, look, index)
+        if index < 2 and self.props.onBack == nil then
+            return false
+        end
+
+        local back = {
+            content.Icon { key = "glyph", name = look.back.symbol, size = 20, color = "primary" },
         }
 
-        if index > 1 then
-            children[#children + 1] = Pressable {
-                key = "back",
-                style = { position = "absolute", left = 0, top = 0, bottom = 0,
-                    direction = "row", align = "center", paddingHorizontal = "sm", gap = 2 },
-                accessibilityLabel = self.props.backTitle or "Back",
-                onPress = function() self:pop() end,
-                Text { text = "‹", style = { fontSize = "title", color = "primary" } },
-                Text {
-                    text = self.props.backTitle or self.props.screens[index - 1].title or "Back",
-                    numberOfLines = 1,
-                    style = { color = "primary" },
-                },
+        if look.back.labelled then
+            local behind = index > 1 and self.props.screens[index - 1].title or nil
+
+            back[#back + 1] = Text {
+                key = "label",
+                text = self.props.backTitle or behind or "Back",
+                numberOfLines = 1,
+                style = { color = "primary", shrink = 1 },
             }
         end
 
+        return Pressable {
+            key = "back",
+            -- The way back yields before the title does, since a long name behind is worth less than
+            -- the name of the screen a reader is looking at.
+            style = { minWidth = chrome.touch, shrink = 1, direction = "row", align = "center", gap = 2 },
+            accessibilityLabel = self.props.backTitle or "Back",
+            onPress = function() self:pop() end,
+            table.unpack(back),
+        }
+    end,
+
+    --- The bar the system this is running on draws, which is the one thing the chrome asks it.
+    ---
+    --- A centred title is centred on the bar, and that only holds when the two sides claim the same
+    --- width — centring it in whatever they happen to leave over puts it wherever the way back is long.
+    --- The trailing side is there with nothing in it for that reason. A title too long to fit between
+    --- them shortens the way back first, since the name of the screen behind is worth less than the
+    --- name of the one being read.
+    Bar = function(self, screen, index)
+        local surface = environment:read(self)
+        local look = chrome.bar(surface.platform, surface.breakpoint)
+        local centred = look.title.align == "center"
+        local actions = screen.actions or self.props.actions
+
+        local sides = centred and { grow = 1, basis = 0, shrink = 1 } or { shrink = 1 }
+        local middle = centred and { shrink = 1 } or { grow = 1, shrink = 1 }
+
         return View {
             key = "bar",
-            style = { { height = BAR, background = "background" }, self.props.barStyle },
-            table.unpack(children),
+            style = { { height = look.height, background = "background", direction = "row",
+                align = "center", paddingHorizontal = "sm", gap = "sm" }, self.props.barStyle },
+
+            View {
+                key = "leading",
+                style = { { direction = "row", align = "center" }, sides },
+                self:Back(look, index),
+            },
+
+            Text {
+                key = "title",
+                text = screen.title or self.props.title or "",
+                numberOfLines = 1,
+                style = { { fontSize = look.title.size, fontWeight = look.title.weight,
+                    textAlign = look.title.align }, middle },
+            },
+
+            View {
+                key = "trailing",
+                style = { { direction = "row", align = "center", justify = "end", gap = "sm" }, sides },
+                actions,
+            },
         }
     end,
 
@@ -326,6 +452,8 @@ M.NavigationStack = support.component("NavigationStack", {
         local screens = self.props.screens
         local index = math.max(1, math.min(#screens, self.props.index or 1))
         local screen = screens[index]
+        local surface = environment:read(self)
+        local look = chrome.bar(surface.platform, surface.breakpoint)
 
         local children = {}
 
@@ -334,11 +462,40 @@ M.NavigationStack = support.component("NavigationStack", {
             children[#children + 1] = Divider { key = "rule" }
         end
 
-        children[#children + 1] = View {
-            key = "screen:" .. tostring(screen.key or index),
-            style = { grow = 1 },
-            contentOf(screen.content),
-        }
+        -- Every screen in the stack stays where it is and the top one covers the rest.
+        --
+        -- Rendering only the top one unmounts everything under it, so a reader coming back arrives at a
+        -- screen that has never been used: a list back at the top, a field emptied, a form forgetting
+        -- what it was told. A platform keeps its whole stack alive and shows the top of it, and a screen
+        -- that is still there is also what a push slides over.
+        local stack = { key = "screens", style = { grow = 1 } }
+        local moving = { duration = "fast", easing = "easeOut" }
+
+        for at = 1, index do
+            local top = at == index
+
+            stack[#stack + 1] = View {
+                key = "screen:" .. tostring(screens[at].key or at),
+                style = top and { grow = 1 } or COVERED,
+                pointerEvents = top and "auto" or "none",
+                transition = top and moving or nil,
+                enter = top and animation.states(look.push).enter or nil,
+                visibility.Showing { value = top, contentOf(screens[at].content) },
+            }
+        end
+
+        -- The screen that was left goes back the way it came, over the one it uncovers.
+        if self.state.leaving ~= nil then
+            stack[#stack + 1] = View {
+                key = "leaving:" .. tostring(self.state.leaving.key or index),
+                style = { COVERING, self.state.going and animation.states(look.push).exit or nil },
+                transition = moving,
+                pointerEvents = "none",
+                contentOf(self.state.leaving.content),
+            }
+        end
+
+        children[#children + 1] = View(stack)
 
         return View { style = { { grow = 1 }, self.props.style }, table.unpack(children) }
     end,
@@ -386,26 +543,39 @@ M.Table = support.component("Table", {
         local ascending = self.props.sortOrder ~= "descending"
 
         table.sort(sorted, function(first, second)
-            local before = tostring(first[key])
-            local after = tostring(second[key])
-
             if ascending then
-                return before < after
+                return precedes(first[key], second[key])
             end
 
-            return after < before
+            return precedes(second[key], first[key])
         end)
 
         return sorted
     end,
 
-    --- Answers the cell of one column, which is what the column renders or the field it names.
-    Cell = function(self, column, row, index)
-        local style = { grow = 1, basis = 0, justify = "center", paddingHorizontal = "sm" }
+    --- Answers the box one column's cells are laid out in, which is the same for its heading and its data.
+    ---
+    --- A heading that sits somewhere its column's data does not is a table nobody can read down. The two
+    --- were laid out by the same line meaning two different things: a heading is a row, so centring it
+    --- centred the title across the column, and a cell is a column, so the same word centred it
+    --- vertically and left the text against the leading edge.
+    column = function(self, column)
+        local box = { direction = "row", align = "center", justify = column.align or "start",
+            paddingHorizontal = "sm" }
 
         if column.width ~= nil then
-            style = { width = column.width, justify = "center", paddingHorizontal = "sm" }
+            box.width = column.width
+            return box
         end
+
+        box.grow = 1
+        box.basis = 0
+        return box
+    end,
+
+    --- Answers the cell of one column, which is what the column renders or the field it names.
+    Cell = function(self, column, row, index)
+        local style = self:column(column)
 
         if column.render ~= nil then
             return View { key = tostring(column.key), style = style, column.render(row, index) }
@@ -414,7 +584,7 @@ M.Table = support.component("Table", {
         return View {
             key = tostring(column.key),
             style = style,
-            Text { text = tostring(row[column.key] or ""), numberOfLines = 1 },
+            Text { text = tostring(row[column.key] or ""), numberOfLines = 1, style = { shrink = 1 } },
         }
     end,
 
@@ -424,31 +594,32 @@ M.Table = support.component("Table", {
 
         for index = 1, #columns do
             local column = columns[index]
-            local style = { grow = 1, basis = 0, justify = "center", paddingHorizontal = "sm" }
-
-            if column.width ~= nil then
-                style = { width = column.width, justify = "center", paddingHorizontal = "sm" }
-            end
-
-            local mark = ""
-            if self.props.sortBy == column.key then
-                mark = self.props.sortOrder == "descending" and " ⌄" or " ⌃"
-            end
+            local sorted = self.props.sortBy == column.key
 
             cells[#cells + 1] = Pressable {
                 key = tostring(column.key),
-                style = style,
+                style = { self:column(column), { minHeight = chrome.touch, gap = 2 } },
                 accessibilityLabel = column.title,
                 onPress = function()
                     if self.props.onSort ~= nil then
                         self.props.onSort(column.key)
                     end
                 end,
+
                 Text {
-                    text = column.title .. mark,
+                    key = "title",
+                    text = column.title,
                     numberOfLines = 1,
-                    style = { fontSize = "footnote", fontWeight = "600", color = "textMuted" },
+                    style = { fontSize = "footnote", fontWeight = "600", color = "textMuted",
+                        shrink = 1 },
                 },
+
+                sorted and content.Icon {
+                    key = "order",
+                    name = self.props.sortOrder == "descending" and "chevron-down" or "chevron-up",
+                    size = 11,
+                    color = "textMuted",
+                } or nil,
             }
         end
 
@@ -514,31 +685,18 @@ M.Drawer = support.component("Drawer", {
     name = "Drawer",
 
     render = function(self)
-        if not self.props.open then
-            return View { style = self.props.style }
-        end
-
         local panel = { position = "absolute", top = 0, bottom = 0, width = self.props.width,
-            background = "background" }
+            background = "elevated", shadow = "lg" }
 
         panel[self.props.side] = 0
 
-        return View {
-            style = { { position = "absolute", left = 0, right = 0, top = 0, bottom = 0 }, self.props.style },
+        local travel = self.props.side == "right" and presentation.fromRight or presentation.fromLeft
 
-            Pressable {
-                key = "scrim",
-                style = { position = "absolute", left = 0, right = 0, top = 0, bottom = 0, background = "overlay" },
-                accessibilityLabel = "Close",
-                onPress = function()
-                    if self.props.onClose ~= nil then
-                        self.props.onClose()
-                    end
-                end,
-            },
-
-            View { key = "panel", style = panel, contentOf(self.props.content) },
-        }
+        return presentation.over(self.props.open, function()
+            if self.props.onClose ~= nil then
+                self.props.onClose()
+            end
+        end, travel, panel, { contentOf(self.props.content) })
     end,
 }))
 
