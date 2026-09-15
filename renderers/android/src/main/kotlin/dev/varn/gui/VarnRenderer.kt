@@ -1,7 +1,8 @@
 package dev.varn.gui
 
 import android.content.Context
-import android.graphics.Rect
+import android.text.Layout
+import android.text.StaticLayout
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
@@ -50,7 +51,9 @@ class VarnRenderer(
         "text" to true, "image" to true, "list" to true, "scroll" to true, "input" to true,
         "video" to true, "webview" to true, "canvas" to true,
         "picker" to true, "datepicker" to true,
-        "haptics" to true, "safearea" to true, "audio" to true, "map" to true, "location" to true, "gradient" to true, "blur" to true,
+        "haptics" to true, "safearea" to true, "audio" to true, "map" to true, "location" to true,
+        "gradient" to true, "nineSlice" to true, "blur" to true, "camera" to true, "microphone" to true,
+        "systemBars" to true,
     )
 
     /** Applies one batch, which is the whole of what a commit does to the interface. */
@@ -77,6 +80,19 @@ class VarnRenderer(
         (view as? VarnFilePicker)?.onOpen = { picker, intent -> onChoose?.invoke(picker, intent) }
         (view as? VarnLocationView)?.onPermission = { permission, decide ->
             onPermission?.invoke(permission, decide)
+        }
+
+        // A camera and a microphone report several different things through one closure of their own,
+        // since what they produced arrives when the hardware is done with it rather than from a control
+        // being used: the name travels with the report rather than being decided when it is bound.
+        (view as? VarnCameraView)?.let { camera ->
+            camera.onPermission = { permission, decide -> onPermission?.invoke(permission, decide) }
+            camera.onEvent = { name, payload -> emit(id, name, payload) }
+        }
+
+        (view as? VarnRecorderView)?.let { recorder ->
+            recorder.onPermission = { permission, decide -> onPermission?.invoke(permission, decide) }
+            recorder.onEvent = { name, payload -> emit(id, name, payload) }
         }
 
         view.id = View.generateViewId()
@@ -111,8 +127,24 @@ class VarnRenderer(
         "segments", "options", "count", "text", "title", "label", "transition", "enter",
     )
 
+    /**
+     * Answers when a prop is applied, since some of them have to be applied before others.
+     *
+     * A handler goes first, because applying a prop can report through one before the batch is over: a
+     * source that cannot be opened at all is refused where it is set, and a sound bound afterwards is one
+     * whose only word about it went nowhere. What a control is made of goes next, since what it holds is
+     * read against its parts.
+     */
+    private fun order(key: String): Int {
+        if (key.startsWith("on")) {
+            return 0
+        }
+
+        return if (structural.contains(key)) 1 else 2
+    }
+
     private fun apply(props: JSONObject, node: Node, id: Int) {
-        val ordered = props.keys().asSequence().sortedBy { if (structural.contains(it)) 0 else 1 }
+        val ordered = props.keys().asSequence().sortedBy { order(it) }
 
         for (key in ordered) {
             val raw = props.get(key)
@@ -173,11 +205,24 @@ class VarnRenderer(
         val parent = op.getInt("parent")
         val index = op.getInt("index")
 
+        // A layer is drawn over the whole application rather than where it was written, and the engine
+        // lays it out against the surface, so the surface is what it hangs from. A box that clips what it
+        // holds, or one a transition is moving, would each take an overlay written inside it with them.
+        if (node.type == "layer") {
+            (node.view.parent as? ViewGroup)?.removeView(node.view)
+            surface.addView(node.view)
+            return
+        }
+
         val container = if (parent == 0) surface else VarnViewFactory.contentView(expect(parent).view)
         (node.view.parent as? ViewGroup)?.removeView(node.view)
 
         val position = index.minus(1).coerceIn(0, container.childCount)
         container.addView(node.view, position)
+
+        // What the tree holds against an edge is drawn over what it covers, and a row realised while the
+        // surface scrolls arrives above it in the order the tree puts it in.
+        ((container.parent as? View) as? VarnCollectionView)?.hold()
     }
 
     private fun remove(id: Int) {
@@ -235,23 +280,27 @@ class VarnRenderer(
         val key = "$text|${paint.textSize}|${paint.typeface.hashCode()}|${paint.letterSpacing}|$leading|$bound"
 
         val cached = measurements.getOrPut(key) {
-            val bounds = Rect()
-            paint.getTextBounds(text, 0, text.length, bounds)
-
             // A text view lays its own text out with getDesiredWidth, so it is measured the same way
             // here. Measured any other way a label ends a fraction short, and it wraps and clips.
-            val natural = android.text.Layout.getDesiredWidth(text, paint) + spacingWidth(text, paint)
-            val lineHeight = if (leading > 0.0) (paint.fontSpacing * leading).toFloat() else paint.fontSpacing
+            val natural = Layout.getDesiredWidth(text, paint) + spacingWidth(text, paint)
 
             // A bound of zero is a node that has not been measured yet, not a node with no room.
             val usable = if (bound != null && bound > 0) (bound * density).toFloat() else 0f
 
-            if (usable > 0f && natural > usable) {
-                floatArrayOf(usable, Math.ceil((natural / usable).toDouble()).toInt() * lineHeight)
-            } else {
-                // A width is rounded up, or a label ends a fraction of a pixel short and clips its text.
-                floatArrayOf(Math.ceil(natural.toDouble()).toFloat(), lineHeight)
-            }
+            // A width is rounded up, or a label ends a fraction of a pixel short and clips its text.
+            val width = if (usable > 0f && natural > usable) usable else Math.ceil(natural.toDouble()).toFloat()
+
+            // How many lines a string takes is the platform's own answer rather than a division: it
+            // breaks between words, and it reads the line breaks the string was written with, which a
+            // width divided by a bound knows nothing about.
+            val laid = StaticLayout.Builder
+                .obtain(text, 0, text.length, paint, maxOf(1, width.toInt()))
+                .setIncludePad(false)
+                .build()
+
+            val lineHeight = if (leading > 0.0) (paint.textSize * leading).toFloat() else paint.fontSpacing
+
+            floatArrayOf(width, laid.lineCount * lineHeight)
         }
 
         return JSONObject()
@@ -274,17 +323,7 @@ class VarnRenderer(
      * A number written into the tree is a number that was true of one platform on one day, and a frame
      * worked out from the old one spills the control out of the box it was given.
      */
-    /**
-     * Answers the size the platform draws a control at, which is the one thing about it Lua cannot know.
-     *
-     * A variant names which of a control the tree asked for. Android has no wheel of its own for a date,
-     * so it answers nothing for that one rather than the size of the control it does have.
-     */
-    fun measureControl(type: String, variant: String?): JSONObject {
-        if (variant == "wheel") {
-            return JSONObject().put("width", 0).put("height", 0)
-        }
-
+    fun measureControl(type: String): JSONObject {
         val control = VarnViewFactory.make(context, type)
         val unbounded = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
 
@@ -296,8 +335,8 @@ class VarnRenderer(
     }
 
     /** Registers a font from the bundle, after which any style may name its family. */
-    fun registerFont(family: String, path: String) {
-        VarnStyle.registerFont(family, path)
+    fun registerFont(family: String, weight: Int, path: String) {
+        VarnStyle.registerFont(family, weight, path)
         measurements.clear()
     }
 
@@ -305,7 +344,31 @@ class VarnRenderer(
     fun invoke(id: Int, method: String, arguments: JSONObject): Boolean =
         VarnActions.perform(method, expect(id).view, arguments, density)
 
+    /**
+     * Paints what the platform draws around the surface, which is everything the tree is not.
+     *
+     * A window shows its own ground wherever the surface does not cover it — behind a screen being
+     * pushed, under a rotation, past the end of a list that overscrolls — and a dark application on a
+     * white window is what leaving it out looks like.
+     */
+    fun showTheme(ground: JSONObject) {
+        val background = VarnStyle.color(ground.opt("background"))
+
+        if (background != null) {
+            surface.setBackgroundColor(background)
+            (surface.context as? android.app.Activity)?.window?.setBackgroundDrawable(
+                android.graphics.drawable.ColorDrawable(background),
+            )
+        }
+    }
+
     /** Answers the surface the engine lays out inside, plus the insets the platform reports. */
+    /** Where the application was asked to be, which a link the reader followed arrives as. */
+    var address: String = "/"
+
+    /** Where the application is, which only the thing holding the window knows and which it says here. */
+    var state: String = "active"
+
     fun surfaceDescription(): JSONObject {
         val insets = VarnInsets.of(surface, density)
 
@@ -317,7 +380,9 @@ class VarnRenderer(
             .put("height", surface.height / density)
             .put("scale", density)
             .put("platform", "android")
+            .put("address", address)
             .put("appearance", if (night == android.content.res.Configuration.UI_MODE_NIGHT_YES) "dark" else "light")
+            .put("state", state)
             .put("safeArea", insets)
     }
 }
@@ -327,4 +392,13 @@ class VarnRendererException(message: String) : RuntimeException(message)
 object VarnValue {
     /** The sentinel an update carries for a prop the new description no longer has. */
     fun isRemoved(value: Any?): Boolean = value == "__varn_removed__" || value == JSONObject.NULL
+
+    /** Answers a number whatever kind json carried it as, since it carries one as any of several. */
+    fun number(value: Any?): Double? = when (value) {
+        is Double -> value
+        is Float -> value.toDouble()
+        is Int -> value.toDouble()
+        is Long -> value.toDouble()
+        else -> null
+    }
 }

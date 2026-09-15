@@ -145,6 +145,31 @@ local mount
 local patch
 local unmount
 
+--- Refuses two children of one node written under the same key, naming the key and where it is.
+---
+--- A key is what says which child a description means, so two meaning one child is a question with no
+--- answer: the second takes the first's place, the first matches nothing on the commit after and is
+--- taken down, and a row a screen drew disappears with nothing anywhere saying why. It is a mistake in
+--- the description rather than a state to recover from, so it is refused where it is written.
+local function eachKeyOnce(sources, parent)
+    local seen = nil
+
+    for index = 1, #sources do
+        local key = sources[index].key
+
+        if key ~= nil then
+            seen = seen or {}
+
+            if seen[key] then
+                error("two children of " .. tostring(parent) .. " carry the key " .. tostring(key)
+                    .. ", and a key names one child", 0)
+            end
+
+            seen[key] = true
+        end
+    end
+end
+
 local function renderInstance(node)
     local rendered = node.instance:render()
 
@@ -284,6 +309,8 @@ local function mountHost(source, ops, pending, parent, arriving)
 
     local inside = arriving or source.props.enter ~= nil
 
+    eachKeyOnce(source.children, node.type)
+
     for index = 1, #source.children do
         local child = mount(source.children[index], ops, pending, node, inside)
         node.children[index] = child
@@ -351,15 +378,17 @@ end
 
 --- Answers whether a node already on screen is the one a description names, rather than a new one.
 ---
---- A key is what says two nodes of the same type are different things. Comparing only the type made a
---- component's own root immune to its key, so a component that says it is showing something else by
---- changing the key was patched in place instead: it never arrived, so nothing it declared to arrive
---- from was ever applied and every overlay appeared in one frame.
+--- A key is what says two nodes of the same type are different things, and a component's own root is no
+--- exception. A component that says it is showing something else by changing the key is replaced rather
+--- than patched, or it never arrives, nothing it declared to arrive from is applied, and every overlay
+--- reaches the screen in one frame.
 local function reusable(previous, source)
     return previous ~= nil and previous.type == source.type and previous.key == source.key
 end
 
 local function patchChildren(node, sources, ops, pending)
+    eachKeyOnce(sources, node.type)
+
     local existing = {}
     for index = 1, #node.children do
         local child = node.children[index]

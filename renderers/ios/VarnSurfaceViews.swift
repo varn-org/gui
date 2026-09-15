@@ -97,3 +97,60 @@ final class VarnBlurView: UIView {
         VarnHit.through(super.hitTest(point, with: event), self)
     }
 }
+
+/// A spinner drawn at the size the engine gave it rather than at one of the two the platform has.
+///
+/// `UIActivityIndicatorView` draws at its own intrinsic size whatever bounds it is put in, so a box of
+/// thirty-two points held a twenty point spinner and the size above it drew no larger. It is scaled
+/// inside a view of its own, since the node's own transform is written from its style on every commit
+/// and anything set on the node would be wiped by the next one.
+final class VarnActivityView: UIView {
+    private let indicator = UIActivityIndicatorView(style: .medium)
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+
+        addSubview(indicator)
+        indicator.startAnimating()
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    var animating: Bool {
+        get { indicator.isAnimating }
+
+        set {
+            if newValue {
+                indicator.startAnimating()
+                return
+            }
+
+            indicator.stopAnimating()
+        }
+    }
+
+    var color: UIColor? {
+        get { indicator.color }
+        set { indicator.color = newValue }
+    }
+
+    override var intrinsicContentSize: CGSize {
+        indicator.intrinsicContentSize
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+
+        let side = min(bounds.width, bounds.height)
+        let drawn = indicator.intrinsicContentSize.width
+
+        indicator.transform = .identity
+        indicator.center = CGPoint(x: bounds.midX, y: bounds.midY)
+
+        guard drawn > 0, side > 0 else {
+            return
+        }
+
+        indicator.transform = CGAffineTransform(scaleX: side / drawn, y: side / drawn)
+    }
+}

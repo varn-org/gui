@@ -2,6 +2,7 @@ local element = require("gui.element")
 local component = require("gui.component")
 local runtime = require("gui.runtime")
 local headless = require("gui.bridge.headless")
+local waitFor = require("gui.tests.waiting")
 
 local View = element.define("view")
 local Text = element.define("text")
@@ -244,17 +245,59 @@ do
         "the renderer must be named for it, got " .. tostring(problem))
 end
 
--- Measuring the same string over and over holds a bounded number of them.
+-- Measuring one string after another holds a bounded number of them.
+--
+-- What matters is that it stops, not the number it stops at: a cache smaller than one screen answers
+-- nothing and one that never gives anything up is a leak, so this asks a great many more questions than
+-- any screen would and holds the answer to being far short of them.
+do
+    local renderer = headless.create()
+    local app = runtime.start(View {}, renderer, { size = { width = 100, height = 100 } })
+    local asked = 40000
+
+    for index = 1, asked do
+        app:measureText("line " .. index, { fontSize = 12 }, nil)
+    end
+
+    assert(app.measurements:held() < asked / 4,
+        "the measurement cache must stay bounded, holds " .. app.measurements:held() .. " of " .. asked)
+end
+
+-- The question a measurement is remembered under names everything the answer depends on.
+--
+-- The spacing between letters, the space between lines and the slant of them each change how much room
+-- a string needs, so a name that leaves one out is the same string at a different spacing answering the
+-- measurement taken for the other. The room it has is taken to whole points, since a layout works its
+-- bounds out of shares and arrives at a different fraction on every pass.
 do
     local renderer = headless.create()
     local app = runtime.start(View {}, renderer, { size = { width = 100, height = 100 } })
 
-    for index = 1, 4000 do
-        app:measureText("line " .. index, { fontSize = 12 }, nil)
+    local plain = { fontSize = 12 }
+    local spaced = { fontSize = 12, letterSpacing = 2 }
+    local tall = { fontSize = 12, lineHeight = 2 }
+    local slanted = { fontSize = 12, fontStyle = "italic" }
+
+    app:measureText("a line", plain, nil)
+
+    local before = app.measurements:held()
+
+    for _, style in ipairs({ spaced, tall, slanted }) do
+        app:measureText("a line", style, nil)
     end
 
-    assert(app.measurements.count <= 512,
-        "the measurement cache must stay bounded, holds " .. app.measurements.count)
+    assert(app.measurements:held() == before + 3,
+        "each of them is a question of its own, it asked " .. (app.measurements:held() - before))
+
+    -- A bound differing by a fraction of a point is the same question, since a point is what is drawn.
+    local held = app.measurements:held()
+
+    app:measureText("a line", plain, 120.2)
+    app:measureText("a line", plain, 120.7)
+
+    assert(app.measurements:held() == held + 1,
+        "a fraction of a point is not a question of its own, it asked "
+            .. (app.measurements:held() - held) .. " times")
 end
 
 --- What a component asks to happen later, run inside the one body this file has.
@@ -275,7 +318,7 @@ local function laterIsReported()
         onProblem = function(problem) told = problem end,
     })
 
-    async.sleep(40):await()
+    waitFor(function() return told ~= nil end)
 
     assert(told ~= nil and told:find("what happened later failed", 1, true) ~= nil,
         "a deferred action that failed must be reported, got " .. tostring(told))
@@ -296,6 +339,7 @@ local function laterIsReported()
     runtime.start(Leaving {}, headless.create(), { size = { width = 100, height = 100 } })
     gone.mounted = false
 
+    -- Nothing to wait for here but the time itself, since what is being proven is that nothing happens.
     async.sleep(60):await()
 
     assert(ran == 0, "a component that has gone does not run what it asked for")
@@ -920,10 +964,173 @@ do
     assert(mounted == 1, "and the one behind it must still be mounted")
 end
 
--- A commit arranged by the host is on a coroutine of its own, so a render that fails there is reported.
+-- What the front door is handed is checked at the front door.
 --
--- Nothing caught it, so the error reached the engine's log and nowhere a reader could see, the
--- coroutine died, and the screen stopped moving with nothing said.
+-- A description that is not an element built a runtime whose root was nothing, and a surface whose width
+-- came from a host as anything but a number laid every box out against it: the failure surfaced inside
+-- the theme, comparing a number with whatever had arrived.
+do
+    local renderer = headless.create()
+
+    local refused = {
+        { "a description is an element", function() runtime.start("hello", renderer, {}) end },
+        { "a description is an element", function() runtime.start(nil, renderer, {}) end },
+        { "a renderer is what applies a batch", function() runtime.start(View {}, nil, {}) end },
+        { "a renderer is what applies a batch", function()
+            runtime.start(View {}, { size = { width = 100, height = 100 } })
+        end },
+        { "a surface is a width and a height", function()
+            runtime.start(View {}, renderer, { size = { width = "wide", height = 100 } })
+        end },
+        { "a surface is a width and a height", function()
+            runtime.start(View {}, renderer, { size = { width = 100, height = -1 } })
+        end },
+        { "state is a table", function()
+            local Screen = component.define({
+                name = "Screen",
+                state = { at = 1 },
+                render = function() return Text { text = "x" } end,
+            })
+
+            local app = runtime.start(Screen {}, headless.create(), { size = { width = 100, height = 100 } })
+
+            app.root.instance:setState("nope")
+        end },
+    }
+
+    for index = 1, #refused do
+        local named, work = refused[index][1], refused[index][2]
+        local ok, problem = pcall(work)
+
+        assert(not ok, named .. " must be refused")
+        assert(tostring(problem):find(named, 1, true) ~= nil,
+            "and the refusal must say so, got " .. tostring(problem))
+    end
+end
+
+-- What a host reports is checked where it arrives, since it is a platform's number rather than a caller's.
+--
+-- A surface whose width is a word lays every box out against it, a safe area of words is added to the
+-- padding of every screen that avoids one, and a scroll offset that is not a number at all reaches the
+-- window that decides which cells exist and asks it for the index of nothing.
+do
+    local told = nil
+    local renderer = headless.create()
+
+    local app = runtime.start(View { style = { grow = 1 }, Text { text = "x" } }, renderer, {
+        size = { width = 390, height = 800 },
+        onProblem = function(problem) told = problem end,
+    })
+
+    local refused = {
+        { "a surface is a width", function() app:resize("wide", 800) end },
+        { "a surface is a width", function() app:resize(-1, 800) end },
+        { "a safe area is four lengths", function() app:setInsets({ top = "a lot" }) end },
+        { "the keyboard covers a length", function() app:setKeyboard("tall") end },
+        { "a theme is what", function() app:setTheme("dark") end },
+    }
+
+    for index = 1, #refused do
+        local named, work = refused[index][1], refused[index][2]
+        local ok, problem = pcall(work)
+
+        assert(not ok, named .. " must be refused")
+        assert(tostring(problem):find(named, 1, true) ~= nil,
+            "and the refusal must say so, got " .. tostring(problem))
+    end
+
+    -- A number that is not one is reported rather than raised, since it arrives from a platform in the
+    -- middle of a gesture and taking the screen down for it would be worse than dropping it.
+    local pressed = 0
+
+    local button = runtime.start(
+        element.define("button")({ title = "Go", onPress = function() pressed = pressed + 1 end }),
+        headless.create(),
+        { size = { width = 390, height = 800 }, onProblem = function(problem) told = problem end }
+    )
+
+    local node = nil
+    for id in pairs(button.byId) do
+        node = id
+    end
+
+    told = nil
+    assert(button:dispatch(node, "onPress", { x = 0 / 0 }) == false, "a payload of nothing is not delivered")
+    assert(pressed == 0, "and the handler is never called with it")
+    assert(told ~= nil and told:find("not a number", 1, true) ~= nil,
+        "and it is reported, got " .. tostring(told))
+end
+
+-- A listener that fails while being told about a failure does not take the runtime with it.
+--
+-- Reporting is where everything that failed is contained, so it is the one call that cannot raise. The
+-- line the engine's log carries while this runs is the fallback doing its job.
+do
+    local refused = 0
+
+    local app = runtime.start(View { Text { text = "here" } }, headless.create(), {
+        size = { width = 320, height = 640 },
+        onProblem = function()
+            refused = refused + 1
+            error("a listener that will not be told", 0)
+        end,
+    })
+
+    local ok = pcall(app.report, app, "a report the listener refuses")
+
+    assert(ok, "a listener that failed must not raise out of the path that contains failures")
+    assert(refused == 1, "and it must have been offered the problem once, got " .. refused)
+end
+
+-- What the engine holds about a node is let go of when the node is.
+--
+-- A node id only ever increases, so a store keyed by one grows for the life of the process: a screen
+-- opened and left a thousand times leaves a thousand offsets and a thousand extents behind, each of them
+-- about a surface that is not there. Anything keyed by what an application produces is bounded.
+do
+    local Scroll = element.define("scroll")
+
+    local Screen = component.define({
+        name = "Opening",
+        state = { open = true },
+
+        render = function(self)
+            if not self.state.open then
+                return View { style = { grow = 1 } }
+            end
+
+            return Scroll { style = { grow = 1 },
+                View { style = { height = 2000 } },
+            }
+        end,
+    })
+
+    local renderer = headless.create()
+    local app = runtime.start(Screen {}, renderer, { size = { width = 390, height = 844 } })
+
+    for _ = 1, 4 do
+        if not app:needsCommit() then
+            break
+        end
+
+        app:commit()
+    end
+
+    local surface = renderer:find("scroll")
+
+    app:dispatch(surface.id, "onScroll", { x = 0, y = 400 })
+    app:commit()
+
+    assert(app.offsets[surface.id] == 400, "the engine holds where a surface was scrolled to")
+    assert(app.extents[surface.id] ~= nil, "and how far its content reaches")
+
+    app.root.instance:setState({ open = false })
+    app:commit()
+
+    assert(app.offsets[surface.id] == nil, "and lets go of the offset when the surface has gone")
+    assert(app.extents[surface.id] == nil, "and of the extent with it")
+end
+
 do
     local async = require("async")
 
@@ -965,7 +1172,7 @@ do
         failing = true
         runtime.root.instance:setState({ count = 1 })
 
-        async.sleep(60):await()
+        waitFor(function() return told ~= nil end)
 
         assert(told ~= nil and told:find("a render that failed", 1, true) ~= nil,
             "a render that failed after the first frame must be reported, got " .. tostring(told))

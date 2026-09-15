@@ -1,3 +1,4 @@
+local parts = require("gui.controls.parts")
 local component = require("gui.component")
 local element = require("gui.element")
 local pool = require("gui.collections.pool")
@@ -529,6 +530,13 @@ M.Carousel = define("Carousel", "carousel", {
                 return
             end
 
+            -- A carousel on a tab that is not the chosen one waits rather than turning, since a reader
+            -- coming back to it would find it somewhere it never saw it go.
+            if not self:visible() then
+                self:turn()
+                return
+            end
+
             local spec = self.spec
             local landed = self.window:indexAt(self.state.scroll)
             local next = landed + 1
@@ -577,6 +585,7 @@ M.Carousel = define("Carousel", "carousel", {
     --- A carousel of many pages cannot draw one dot each and stay inside its own width, so the row is a
     --- window of at most seven that travels with the page being read.
     Dots = function(self, count)
+        local theme = parts.themeOf(self)
         local landed = self.window:indexAt(self.state.scroll)
         local shown = math.min(count, DOTS)
         local first = math.max(1, math.min(landed - math.floor(shown / 2), count - shown + 1))
@@ -586,10 +595,10 @@ M.Carousel = define("Carousel", "carousel", {
             dots[#dots + 1] = View {
                 key = "dot:" .. index,
                 style = {
-                    width = 7,
-                    height = 7,
+                    width = theme:metric("collection", "dot"),
+                    height = theme:metric("collection", "dot"),
                     radius = "pill",
-                    background = index == landed and "primary" or "separator",
+                    background = parts.paint(theme, "collection", "dot", { on = index == landed }),
                 },
             }
         end
@@ -600,11 +609,11 @@ M.Carousel = define("Carousel", "carousel", {
                 position = "absolute",
                 left = 0,
                 right = 0,
-                bottom = 10,
+                bottom = 16,
                 direction = "row",
                 justify = "center",
                 align = "center",
-                gap = 6,
+                gap = theme:metric("collection", "dotGap"),
             },
             table.unpack(dots),
         }

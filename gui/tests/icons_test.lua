@@ -75,4 +75,32 @@ do
     assert(canvas.props.style.width == 28, "drawn in the box it was asked for")
 end
 
-print("gui.icons ok")
+-- Every icon in the set draws something, and the gallery draws every one of them.
+--
+-- A name nobody draws is a shape nobody has ever seen: it ships, a caller picks it, and whether it comes
+-- out as anything at all has never been established. The set is drawn whole on one screen instead.
+do
+    local fs = require("fs")
+    local async = require("async")
+
+    async.run(function()
+        local empty = {}
+
+        for _, name in ipairs(icons.names()) do
+            local commands = icons.commands(name, 24, "#000000ff")
+
+            if commands == nil or #commands == 0 then
+                empty[#empty + 1] = name
+            end
+        end
+
+        assert(#empty == 0, "these icons draw nothing at all: " .. table.concat(empty, ", "))
+
+        local source = fs.readFile("sample/demos/content.lua"):await()
+
+        assert(source:find("icons.names()", 1, true) ~= nil,
+            "the gallery draws the whole set rather than a chosen few")
+
+        print("gui.icons ok")
+    end)
+end

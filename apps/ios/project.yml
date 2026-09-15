@@ -1,4 +1,4 @@
-name: VarnGUIGallery
+name: VarnGUI
 options:
   bundleIdPrefix: dev.varn.gui
   deploymentTarget:
@@ -17,7 +17,7 @@ settings:
     TARGETED_DEVICE_FAMILY: "1,2"
 
 targets:
-  VarnGUIGallery:
+  VarnGUI:
     type: application
     platform: iOS
 
@@ -48,6 +48,11 @@ targets:
       properties:
         CFBundleDisplayName: Varn GUI
         NSLocationWhenInUseUsageDescription: The map example shows where you are.
+        NSCameraUsageDescription: The camera example shows what the camera sees and takes pictures with it.
+        NSMicrophoneUsageDescription: The camera example records sound with a film, and the voice note records one on its own.
+        NSPhotoLibraryAddUsageDescription: Keeping a picture or a film puts it where the phone keeps them.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
         CFBundleShortVersionString: "1.0.0"
         CFBundleVersion: "1"
         UILaunchScreen: {}
@@ -64,18 +69,18 @@ targets:
 
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.varn.gui.gallery
+        PRODUCT_BUNDLE_IDENTIFIER: dev.varn.gui
 
   # A screen is proven by touching it, which is the one thing a tree-based case cannot do.
-  VarnGUIGalleryUITests:
+  VarnGUIUITests:
     type: bundle.ui-testing
     platform: iOS
     sources:
       - path: UITests
     dependencies:
-      - target: VarnGUIGallery
+      - target: VarnGUI
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.varn.gui.gallery.uitests
+        PRODUCT_BUNDLE_IDENTIFIER: dev.varn.gui.uitests
         GENERATE_INFOPLIST_FILE: YES
-        TEST_TARGET_NAME: VarnGUIGallery
+        TEST_TARGET_NAME: VarnGUI

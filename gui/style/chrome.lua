@@ -6,22 +6,32 @@ local M = {}
 --- button carries the previous screen's title on one and nothing but an arrow on the other, and a title
 --- sits in the middle of one and against the leading edge of the other. Getting any of them wrong is
 --- what makes an application read as something ported rather than something written for the device.
+--- `large` is the row a big title is drawn in, under the bar's own row and above the rule the bar draws.
+--- A large title belongs to the bar rather than to the screen: drawn inside the content it is a heading
+--- with the bar's own rule cut across the top of it, and it cannot collapse as the reader scrolls.
+--- `collapse` is how far the content moves before the big title gives way to the small one.
 local BARS = {
     ios = {
         height = 44,
         title = { size = "headline", weight = "600", align = "center" },
+        large = { height = 52, size = "display", weight = "700", align = "left" },
+        collapse = 24,
         back = { symbol = "chevron-left", labelled = true, size = "title" },
         push = "slideLeft",
     },
     android = {
         height = 56,
         title = { size = "title", weight = "500", align = "left" },
+        large = { height = 72, size = "display", weight = "500", align = "left" },
+        collapse = 32,
         back = { symbol = "arrow-left", labelled = false, size = "title" },
         push = "fade",
     },
     web = {
         height = 48,
         title = { size = "headline", weight = "600", align = "left" },
+        large = { height = 56, size = "display", weight = "700", align = "left" },
+        collapse = 24,
         back = { symbol = "arrow-left", labelled = true, size = "headline" },
         push = "fade",
     },

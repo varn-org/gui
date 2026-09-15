@@ -62,6 +62,8 @@ local Gallery = gui.component({
     end,
 
     Index = function(self)
+        local insets = gui.environment:read(self).insets
+
         return gui.SectionList {
             style = { grow = 1, background = "surface" },
             sections = catalogue.groups,
@@ -70,6 +72,11 @@ local Gallery = gui.component({
             stickyHeaders = true,
             separator = gui.Divider { color = "separator" },
             keyExtractor = function(item) return item.key end,
+
+            -- The index scrolls under whatever the system draws over the bottom of the glass, and stops
+            -- above it, so the last row is one a finger can reach rather than one under the indicator.
+            footer = gui.Spacer { size = insets.bottom },
+            footerExtent = insets.bottom,
 
             renderHeader = function(section)
                 return gui.View {
@@ -103,6 +110,19 @@ local Gallery = gui.component({
         return gui.View { style = { grow = 1, background = "background" }, demo.render() }
     end,
 
+    --- The pane's stack, which is a waiting screen with whatever was opened pushed onto it.
+    Screens = function(self, demo)
+        local screens = {
+            { key = "empty", title = "Gallery", content = self:Body(nil) },
+        }
+
+        if demo ~= nil then
+            screens[2] = { key = demo.key, title = demo.title, content = self:Body(demo) }
+        end
+
+        return screens
+    end,
+
     --- The index beside what it opened, or one at a time where there is no room for both.
     ---
     --- One tree, whichever there is room for. Rendering a split when it fits and a stack when it does not
@@ -112,12 +132,13 @@ local Gallery = gui.component({
         local demo = self:current()
         local together = gui.environment:read(self).breakpoint ~= "compact"
 
+        -- The application owns the whole of the glass. The bar takes the strip the status bar is drawn
+        -- over into itself, so it is one bar running to the top rather than a painted band with a bar
+        -- under it, and what scrolls ends above the home indicator rather than under it. Only the sides
+        -- are kept clear here, which is what a phone held sideways needs.
         return gui.SafeArea {
+            edges = { "left", "right" },
             style = { grow = 1, background = "surface" },
-
-            -- What the status bar and the home indicator sit over, which is the bar's own colour so the
-            -- bar runs all the way up rather than ending in a hard edge below the clock.
-            barStyle = { background = "background" },
 
             gui.SplitView {
                 sidebarWidth = 340,
@@ -128,22 +149,21 @@ local Gallery = gui.component({
                     screens = { { key = "index", title = "Varn GUI", content = self:Sidebar() } },
                 },
 
+                -- A demo is pushed onto the pane rather than swapped into it, so closing one pops a
+                -- stack: the screen that is leaving keeps its own bar while it travels out, and the one
+                -- underneath never carries a way back it has no use for.
                 content = gui.NavigationStack {
                     style = { grow = 1 },
-
-                    -- With the index beside it there is nowhere to go back to, and with it covered there is.
-                    onBack = not together and function() self:close() end or nil,
                     backTitle = "Varn GUI",
 
                     -- A whole application draws its own bar, so a second one over it is two bars and a
                     -- title that is not the screen's.
                     hidesBar = demo ~= nil and demo.chrome == false,
 
-                    screens = {
-                        { key = demo ~= nil and demo.key or "empty",
-                          title = demo ~= nil and demo.title or "Gallery",
-                          content = self:Body(demo) },
-                    },
+                    index = demo ~= nil and 2 or 1,
+                    onIndexChange = function() self:close() end,
+
+                    screens = self:Screens(demo),
                 },
             },
         }

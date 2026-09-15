@@ -72,6 +72,35 @@ do
     box(frames, a, 5, 5, 90, 10)
 end
 
+-- A box with a margin of its own is the box its children are placed against.
+--
+-- The share of the main axis a growing child is given was handed back to it with its own margins added,
+-- so everything inside it was laid out against a box larger than the box it is drawn in: a cell 80 tall
+-- with 8 of margin centred its label as though it were 96 tall, and every centred label in a grid, a
+-- card or a row sat half a margin too low on all three platforms.
+do
+    local label = node({ width = 40, height = 18 })
+    local cell = node({ grow = 1, margin = 8, justify = "center", align = "center" }, { label })
+    local root = node({ width = 200, height = 96 }, { cell })
+
+    local frames = flex.compute(root, { width = 200, height = 96 })
+
+    box(frames, cell, 8, 8, 184, 80)
+    box(frames, label, 72, 31, 40, 18)
+end
+
+-- The same along a row, where the share is the width and the margins are the ones across it.
+do
+    local label = node({ width = 40, height = 18 })
+    local cell = node({ grow = 1, margin = 10, justify = "center", align = "center" }, { label })
+    local root = node({ width = 200, height = 60, direction = "row" }, { cell })
+
+    local frames = flex.compute(root, { width = 200, height = 60 })
+
+    box(frames, cell, 10, 10, 180, 40)
+    box(frames, label, 70, 11, 40, 18)
+end
+
 -- Gap separates children without needing a margin on each one.
 do
     local a = node({ height = 10 })
@@ -303,6 +332,33 @@ do
     box(frames, second, 200, 0, 200, 40)
 end
 
+-- A row inside a horizontal scroll measures its content against no width at all, never against its own
+-- height. Handed the height, a chip measured its label against the 44 points a finger needs and every
+-- label longer than that came back clipped.
+do
+    local label = { style = {}, children = {}, text = "Reykjavik", lines = 1 }
+    local chip = node({ direction = "row", minHeight = 44, paddingHorizontal = 16, align = "center" }, { label })
+    local scroll = { style = { direction = "row" }, scrolls = "horizontal", children = { chip } }
+    local root = node({ width = 300, height = 300 }, { scroll })
+
+    local frames = flex.compute(root, {
+        width = 300,
+        height = 300,
+        measureText = function(text, _, bound)
+            local natural = #text * 8
+
+            if bound == nil then
+                return { width = natural, height = 16 }
+            end
+
+            return { width = math.min(natural, bound), height = 16 }
+        end,
+    })
+
+    near(frameOf(frames, label).width, 72, "the label keeps the width it asked for")
+    near(frameOf(frames, chip).width, 104, "and the chip is that label and its padding")
+end
+
 -- A vertical scrolling view asks for no height of its own, so what sits after it is not pushed away.
 do
     local tall = node({ height = 900 })
@@ -396,6 +452,26 @@ do
 
     near(frameOf(frames, control).width, 51, "the control keeps its own width")
     assert(frameOf(frames, label).width < 120, "the label is what gives way instead")
+end
+
+-- A control with an opinion about one axis and none about the other fills the room it is given on the
+-- axis it said nothing about, which is what a slider and a segmented control do.
+--
+-- The axis was read with an `and`/`or`, so a control declaring a width and no height was asked for its
+-- height, answered nothing, and had its width read instead: in a row it was held to 31 tall because it
+-- was 51 wide.
+do
+    local natural = require("gui.layout.natural")
+    natural.declare("meter", { size = { width = 51 } })
+
+    local control = { style = {}, children = {}, natural = natural.sizeOf("meter", {}) }
+    local row = node({ direction = "row", width = 120, height = 40, align = "stretch" }, { control })
+    local root = node({ width = 120, height = 40 }, { row })
+
+    local frames = flex.compute(root, { width = 120, height = 40 })
+
+    near(frameOf(frames, control).width, 51, "the axis it has an opinion about is its own")
+    near(frameOf(frames, control).height, 40, "and the one it does not is the room it was given")
 end
 
 -- A percentage laid out before its holder had a size is worked out again once it has one.
@@ -742,11 +818,65 @@ do
     assert(stepper.width == stepperNatural.width,
         "and so is a stepper, is " .. stepper.width)
 
-    -- A platform that answers nothing for an axis has no opinion about it, and those still fill.
+    -- Which axes the platform decides is the declaration's to say, never the platform's to be asked.
+    --
+    -- Every platform answers a width for a slider and for a segmented control — a browser says a slider
+    -- is 129 across — and none of those is what either is drawn at, since both run the width of the row
+    -- they sit in. Taking the answer gave a browser a slider a third of the width it had and the other
+    -- two something else again, and the exception lived in one renderer, so the three disagreed.
     local slider, sliderNatural = laid(gui.Slider { value = 0.5 })
 
-    assert(sliderNatural.width == 0, "the platform has no opinion about how wide a slider is")
-    assert(slider.width == 652, "so a slider fills the room it is given, is " .. slider.width)
+    assert(sliderNatural.width > 0, "the platform answers a width for a slider, which is not what it is worth")
+    assert(slider.width == 652, "a slider fills the room it is given, is " .. slider.width)
+    assert(slider.height == sliderNatural.height,
+        "and is as tall as the platform draws one, is " .. slider.height)
+
+    local segmented, segmentedNatural = laid(gui.SegmentedControl { segments = { "One", "Two" } })
+
+    assert(segmentedNatural.width > 0, "and the same of a segmented control")
+    assert(segmented.width == 652, "which fills the room it is given too, is " .. segmented.width)
+end
+
+-- A node taken out of flow is placed inside the box that holds it, and inside its padding.
+--
+-- There is no positioned ancestor to look for: every box is one to be placed against, which is what
+-- makes a frame relative to the node it sits inside on all three renderers.
+do
+    local pinned = node({ position = "absolute", left = 0, top = 0, width = 30, height = 30 })
+    local stretched = node({ position = "absolute", left = 0, right = 0, top = 40, height = 20 })
+    local middle = node({ grow = 1, padding = 10 }, { pinned, stretched })
+    local root = node({ grow = 1, padding = 20 }, { middle })
+
+    local frames = flex.compute(root, { width = 300, height = 300 })
+
+    box(frames, pinned, 10, 10, 30, 30)
+    near(frameOf(frames, stretched).width, 240, "a box pinned at both edges is stretched between them")
+end
+
+-- A string that says where its own lines end is as tall as it says, however much room it is given.
+--
+-- Every platform's text engine reads a line break, and a browser is the one that does not: it collapses
+-- one into a space unless it is told otherwise, so a label written in three lines was drawn as one and
+-- measured as one, and everything below it sat two lines too high.
+do
+    local headless = require("gui.bridge.headless").create()
+
+    local one = { style = {}, children = {}, text = "one" }
+    local three = { style = {}, children = {}, text = "one\ntwo\nthree" }
+    local root = node({ width = 400, height = 400 }, { one, three })
+
+    local frames = flex.compute(root, {
+        width = 400,
+        height = 400,
+        measureText = function(text, style, bound) return headless:measureText(text, style, bound) end,
+    })
+
+    local single = frameOf(frames, one).height
+    local written = frameOf(frames, three).height
+
+    near(written, single * 3, "a label of three lines is three lines tall")
+    near(headless:measureText("one\ntwo\nthree", {}, 0).width, headless:measureText("three", {}, 0).width,
+        "and as wide as its longest line rather than all of them run together")
 end
 
 print("gui.layout ok")

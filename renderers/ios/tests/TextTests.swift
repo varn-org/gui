@@ -45,4 +45,24 @@ final class TextTests: XCTestCase {
 
         XCTAssertEqual(boxed.insets, UIEdgeInsets(top: 4, left: 12, bottom: 8, right: 2))
     }
+
+    /// A family is a name over several faces, and asking for the name alone answers one of them. The
+    /// framework sets every tree in a family of its own, so a weight that was dropped there was dropped
+    /// everywhere: an unread message and a read one came out in the same face.
+    func testAFamilyIsDrawnInTheWeightItWasAskedFor() throws {
+        let plain = VarnStyle.font(from: ["fontFamily": "Helvetica", "fontWeight": "400", "fontSize": 17])
+        let heavy = VarnStyle.font(from: ["fontFamily": "Helvetica", "fontWeight": "700", "fontSize": 17])
+
+        XCTAssertEqual(plain.familyName, "Helvetica", "the family asked for is the family drawn")
+        XCTAssertEqual(heavy.familyName, "Helvetica", "in both weights")
+        XCTAssertNotEqual(plain.fontName, heavy.fontName, "and each weight is a face of its own")
+    }
+
+    /// A family nobody registered is not a family, so the system font is what draws it rather than a
+    /// face the descriptor happened to match.
+    func testAFamilyNobodyRegisteredFallsToTheSystemFont() throws {
+        let unknown = VarnStyle.font(from: ["fontFamily": "NotAFamilyAnybodyHas", "fontSize": 17])
+
+        XCTAssertEqual(unknown, UIFont.systemFont(ofSize: 17, weight: .regular))
+    }
 }

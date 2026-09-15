@@ -4,14 +4,20 @@
 from __future__ import annotations
 
 import argparse
+import functools
+import hashlib
+import http.server
 import json
 import os
 import platform
+import re
 import shutil
+import socketserver
 import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import urllib.request
 import zipfile
@@ -99,6 +105,18 @@ def _shaped(path: Path) -> str:
     return ""
 
 
+def _why(stderr: str) -> str:
+    """Answers what a test said when it failed, out of the engine's own log line."""
+    for line in stderr.splitlines():
+        if "[error]" not in line:
+            continue
+
+        said = line.split("] ")[-1].strip()
+        return said[:200]
+
+    return ""
+
+
 def test(args: argparse.Namespace) -> None:
     engine = _engine(args)
     suite = sorted(ROOT.glob("gui/tests/*_test.lua"))
@@ -109,12 +127,12 @@ def test(args: argparse.Namespace) -> None:
     if not suite:
         raise SystemExit("no tests matched")
 
-    failed = []
+    failed = {}
     for path in suite:
         reason = _shaped(path)
         if reason:
             print(f"{path.name}: {reason}")
-            failed.append(path.name)
+            failed[path.name] = reason
             continue
 
         scratch = tempfile.mkdtemp(prefix="varn-gui-")
@@ -134,12 +152,17 @@ def test(args: argparse.Namespace) -> None:
         # A test says when it has finished. Anything after an await runs once the chunk has ended, so a
         # body that dies there leaves the engine exiting cleanly and the test looking as if it passed.
         if result.returncode != 0 or " ok" not in result.stdout:
-            failed.append(path.name)
+            failed[path.name] = _why(result.stderr) or "said nothing about why"
 
     print()
     print(f"{len(suite) - len(failed)} passed, {len(failed)} failed")
+
+    # What failed scrolls past thirty other files, so the reason is said again at the end rather than
+    # left to be found.
     if failed:
-        print("failed: " + ", ".join(failed))
+        for name, reason in failed.items():
+            print(f"failed: {name}: {reason}")
+
         sys.exit(1)
 
 
@@ -175,10 +198,12 @@ def framework(output: Path) -> Path:
 
     output.parent.mkdir(parents=True, exist_ok=True)
 
+    carried = [path for path in sorted((ROOT / "gui").rglob("*.lua")) if "/tests/" not in path.as_posix()]
+    carried += sorted((ROOT / "gui" / "assets" / "fonts").glob("*.ttf"))
+
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
-        for path in sorted((ROOT / "gui").rglob("*.lua")):
-            if "/tests/" not in path.as_posix():
-                archive.write(path, path.relative_to(ROOT).as_posix())
+        for path in carried:
+            archive.write(path, path.relative_to(ROOT).as_posix())
 
     print(f"packed {output.relative_to(ROOT)}")
     return output
@@ -191,18 +216,195 @@ def sample(args: argparse.Namespace) -> None:
     framework(ROOT / "sample" / "dist" / "framework.zip")
 
 
-def web(args: argparse.Namespace) -> None:
-    """Assembles what the page loads: the framework, the gallery, and the engine beside them."""
+def _icon(source: Path) -> str:
+    """Answers the picture an application names as its icon, which is what the page shows in its tab."""
+    manifest = (source / "manifest.lua").read_text()
+    named = re.search(r"""icon\s*=\s*["']([^"']+)["']""", manifest)
 
-    target = ROOT / "apps" / "web"
+    if named is None:
+        raise SystemExit(f"{source}/manifest.lua names no icon, which the page needs for its tab")
+
+    return named.group(1)
+
+
+def _stamped(name: str, content: bytes) -> str:
+    """Answers the name a file is served under, which carries the hash of what it holds."""
+    stem, _, extension = name.rpartition(".")
+    return f"{stem}.{hashlib.sha256(content).hexdigest()[:12]}.{extension}"
+
+
+def _written(into: Path, name: str, content: bytes, stamped: dict[str, str]) -> str:
+    """Writes one file under its stamped name, and remembers the name it was written under."""
+    served = _stamped(name, content)
+    (into / served).write_bytes(content)
+    stamped[name] = served
+    return served
+
+
+def _rewritten(text: str, stamped: dict[str, str]) -> bytes:
+    """Answers a source with every name it loads replaced by the name that name is served under."""
+    for name, served in stamped.items():
+        text = text.replace(f'"./{name}"', f'"./{served}"')
+
+    return text.encode()
+
+
+def _ordered(entry: Path) -> list[Path]:
+    """Answers a module and everything it imports, each one after what it imports."""
+    order = []
+    seen = set()
+
+    def walk(source: Path) -> None:
+        if source in seen:
+            return
+
+        seen.add(source)
+
+        for name in re.findall(r'from "\./([\w.-]+)"', source.read_text()):
+            walk(source.parent / name)
+
+        order.append(source)
+
+    walk(entry)
+    return order
+
+
+def web(args: argparse.Namespace) -> None:
+    """Assembles the page into a folder a static host serves as it stands, every file named by its hash.
+
+    A browser keeps what it has already fetched, so a deploy that reuses a name is a reader running half
+    the new files and half the old until they think to reload the hard way. A name that carries the hash
+    of what it holds cannot be stale: it is either what the page asks for or it is a file nobody asks
+    for. The page itself is the one name that never changes, and it is the one thing never cached."""
+
+    target = ROOT / "apps" / "web" / "dist"
+    source = ROOT / "apps" / "web"
+
     sample(args)
 
-    for name in ("gallery.vap", "framework.zip"):
-        shutil.copyfile(ROOT / "sample" / "dist" / name, target / name)
-        print(f"copied {(target / name).relative_to(ROOT)}")
+    if target.exists():
+        shutil.rmtree(target)
 
-    if not (target / "varn_wasm.wasm").exists():
-        print("the engine is missing: run `python3 run.py fetch-native --platform web`")
+    target.mkdir(parents=True)
+    stamped: dict[str, str] = {}
+
+    for name, path in (
+        ("gallery.vap", ROOT / "sample" / "dist" / "gallery.vap"),
+        ("framework.zip", ROOT / "sample" / "dist" / "framework.zip"),
+        ("favicon.png", ROOT / "sample" / "assets" / _icon(ROOT / "sample")),
+    ):
+        _written(target, name, path.read_bytes(), stamped)
+
+    engine = source / "varn_wasm.wasm"
+
+    if not engine.exists():
+        raise SystemExit("the engine is missing: run `python3 run.py fetch-native --platform web`")
+
+    _written(target, "varn_wasm.wasm", engine.read_bytes(), stamped)
+    _written(target, "varn_wasm.js", (source / "varn_wasm.js").read_bytes(), stamped)
+
+    # The renderer is written beside its own sources and read by the page, which is served from this
+    # folder and can reach nothing above it. Each module is written after what it imports, so the names
+    # it imports are already the names they are served under.
+    for module in _ordered(ROOT / "renderers" / "web" / "host.js"):
+        _written(target, module.name, _rewritten(module.read_text(), stamped), stamped)
+
+    _written(target, "main.js", _rewritten((source / "main.js").read_text(), stamped), stamped)
+
+    # The page names what it loads and nothing names the page, so it is the one file a host must not let
+    # a browser keep.
+    (target / "index.html").write_bytes(_rewritten((source / "index.html").read_text(), stamped))
+
+    # The engine's own loader is a vendored bundle full of strings that read like paths and are not, and
+    # it finds its wasm through `locateFile` rather than by loading a name, so what is asked here is what
+    # the page itself loads.
+    ours = [target / "index.html"] + [target / stamped[name] for name in stamped if name.endswith(".js")]
+    missing = _unreachable(target, [path for path in ours if path.name != stamped["varn_wasm.js"]])
+
+    if missing:
+        raise SystemExit("the page loads what it does not carry: " + ", ".join(sorted(missing)))
+
+    print(f"assembled {target.relative_to(ROOT)}: {len(stamped) + 1} files, each named by its own hash")
+
+
+def _unreachable(page: Path, sources: list[Path]) -> set[str]:
+    """Answers everything the given files load from outside the folder a host serves the page as.
+
+    Existing on this disk is not the question: a browser is given this folder and nothing above it, so a
+    name that climbs out of it answers 404 however plainly the file sits there."""
+    missing = set()
+    root = page.resolve()
+
+    for source in sources:
+        for name in re.findall(r'"(\.\.?/[^"]+)"', source.read_text()):
+            resolved = (source.parent / name).resolve()
+
+            if not resolved.exists() or root not in resolved.parents:
+                missing.add(f"{source.name} loads {name}")
+
+    return missing
+
+
+def _server(port: int) -> socketserver.ThreadingTCPServer:
+    """Answers a server for the assembled page, since a browser needs one for its modules and its wasm.
+
+    A port of nought is one the system chooses, which is what something driving a browser of its own asks
+    for rather than taking a port a person may already be serving on."""
+    root = ROOT / "apps" / "web" / "dist"
+
+    handler = functools.partial(_Page, directory=str(root))
+    socketserver.ThreadingTCPServer.allow_reuse_address = True
+
+    return socketserver.ThreadingTCPServer(("", port), handler)
+
+
+def serve(args: argparse.Namespace) -> None:
+    """Serves the assembled page, which is how a browser opens it."""
+
+    # The page is assembled again here rather than served as it was left: a reload after a change in Lua
+    # would otherwise show what was packed before it.
+    web(args)
+
+    with _server(args.port) as server:
+        print(f"the gallery is at http://localhost:{server.server_address[1]}", flush=True)
+
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            print()
+
+
+class _Page(http.server.SimpleHTTPRequestHandler):
+    """Answers for the page the way a host in front of it should, and without a line per request.
+
+    Every file but the page itself carries the hash of what it holds, so it is safe to keep for good and
+    a deploy can never be half of one build and half of another. The page names them and nothing names
+    the page, so the page is the one file a browser must ask about every time."""
+
+    def do_GET(self) -> None:
+        """Answers the page for an address that names no file, which is what a router's address is.
+
+        A reader who follows a link and then reloads is asking a static host for a path no file sits at,
+        and a host that answers 404 there is one where every deep link is broken on arrival."""
+        wanted = Path(self.translate_path(self.path))
+
+        if not wanted.exists() and "." not in wanted.name:
+            self.path = "/index.html"
+
+        super().do_GET()
+
+    def end_headers(self) -> None:
+        stamped = re.search(r"\.[0-9a-f]{12}\.", self.path) is not None
+
+        self.send_header(
+            "Cache-Control",
+            "public, max-age=31536000, immutable" if stamped else "no-store",
+        )
+
+        super().end_headers()
+
+    def log_message(self, format: str, *arguments: object) -> None:
+        pass
 
 
 NATIVE = {
@@ -251,6 +453,36 @@ def fetch_native(args: argparse.Namespace) -> None:
             shutil.rmtree(staging, ignore_errors=True)
 
 
+def reference(args: argparse.Namespace) -> None:
+    """Writes the component table in docs/components.md from the declarations themselves.
+
+    The table is generated rather than written, so a component cannot document a prop it does not
+    accept. Doing it by hand is how one row was right and the next was a guess."""
+    engine = _engine(args)
+    page = ROOT / "docs" / "components.md"
+
+    built = subprocess.run(
+        [str(engine), "gui/tools/reference.lua"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    if built.returncode != 0:
+        sys.stderr.write(built.stderr)
+        raise SystemExit("the reference could not be generated")
+
+    opens = "## Every component\n\n"
+    closes = "\n## What is not in the table"
+    written = page.read_text()
+
+    head = written.index(opens) + len(opens)
+    tail = written.index(closes)
+
+    page.write_text(written[:head] + built.stdout.strip() + "\n" + written[tail:])
+    print(f"wrote {page.relative_to(ROOT)}")
+
+
 def doctor(args: argparse.Namespace) -> None:
     engine = _engine(args)
     result = subprocess.run(
@@ -260,9 +492,12 @@ def doctor(args: argparse.Namespace) -> None:
     sys.exit(result.returncode)
 
 
-# Each screen the gallery is judged by, and the environment the sample reads to open it.
-def _demos(engine: Path) -> list[str]:
-    """Answers every demo the gallery carries, asked of the gallery rather than kept in a list here."""
+def _demos(engine: Path) -> list[tuple[str, str, list[str]]]:
+    """Answers every demo the gallery carries, the title its row is drawn under, and its walk.
+
+    The gallery is asked rather than a list kept here, so a demo added to the catalogue is looked at
+    without anything in this file being told about it. A walk is what to press to reach the screens
+    inside a whole application, which is empty for a demo that is one screen."""
     listing = subprocess.run(
         [str(engine), "sample/list-demos.lua"],
         cwd=ROOT,
@@ -271,7 +506,14 @@ def _demos(engine: Path) -> list[str]:
         text=True,
     )
 
-    return [line for line in listing.stdout.split("\n") if "/" in line]
+    found = [line.split("\t") for line in listing.stdout.split("\n") if "\t" in line]
+    walks = []
+
+    for row in found:
+        screens = [step.split("=", 1) for step in row[2:]]
+        walks.append((row[0], row[1], [{"as": name, "press": label} for name, label in screens]))
+
+    return walks
 
 
 def _simulator(device: str) -> str:
@@ -293,19 +535,92 @@ def _simulator(device: str) -> str:
     raise SystemExit("no simulator is booted: open one, or name it with --device")
 
 
+def _capture(device: str, target: Path, settle: float, patience: float) -> None:
+    """Writes a shot once the screen has stopped changing, rather than after a fixed wait.
+
+    A screen that fetches something is not finished when its tree is: a map draws its tiles, a web view
+    loads its page and a picture arrives from somewhere else, all of them after the first frame. A shot
+    taken before they land is a blank screen this tool exists to find rather than one it made."""
+    previous = None
+    waited = 0.0
+
+    while True:
+        time.sleep(settle)
+        waited += settle
+
+        subprocess.run(["xcrun", "simctl", "io", device, "screenshot", str(target)], check=True,
+                       stderr=subprocess.DEVNULL)
+
+        current = target.read_bytes()
+
+        if current == previous or waited >= patience:
+            return
+
+        previous = current
+
+
+def _appearances(args: argparse.Namespace) -> list[str]:
+    """Answers which appearances are wanted, which is both of them unless one was named."""
+    if args.appearance == "all":
+        return ["light", "dark"]
+
+    return [args.appearance]
+
+
 def shots(args: argparse.Namespace) -> None:
-    """Take one screenshot per screen on the iOS simulator, so the chrome is looked at rather than argued about."""
-    device = _simulator(args.device)
-    bundle = "dev.varn.gui.gallery"
+    """Take one screenshot per screen, so what a platform draws is looked at rather than argued about."""
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
 
+    if args.platform in ("ios", "all"):
+        _ios_shots(args, output)
+
+    if args.platform in ("web", "all"):
+        _web_shots(args, output)
+
+
+def _web_shots(args: argparse.Namespace, output: Path) -> None:
+    """Walks the gallery in a headless browser, opening each screen the way a reader opens it."""
+    web(args)
+
+    demos = [
+        {"name": name, "title": title, "screens": screens}
+        for name, title, screens in _demos(_engine(args))
+        if args.only in name.replace("/", "-")
+    ]
+
+    print("> the browser is walking the gallery")
+
+    with _server(0) as server:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+
+        wanted = {
+            "url": f"http://127.0.0.1:{server.server_address[1]}/",
+            "output": str(output),
+            "demos": demos,
+            "appearances": _appearances(args),
+        }
+
+        try:
+            subprocess.run(
+                ["node", str(ROOT / "renderers" / "web" / "tools" / "shots.mjs"), json.dumps(wanted)],
+                cwd=ROOT,
+                check=True,
+            )
+        finally:
+            server.shutdown()
+
+
+def _ios_shots(args: argparse.Namespace, output: Path) -> None:
+    """Launches the gallery once per screen on the simulator, since the application reads which to open."""
+    device = _simulator(args.device)
+    bundle = "dev.varn.gui"
+
     sample(args)
 
-    # Every screen the gallery is judged by, and the environment the sample reads to open it. A demo
-    # added to the catalogue is looked at without anything here being told about it.
+    # Every screen the gallery is judged by, and the environment the sample reads to open it.
     shot_list = [("index", {})]
-    for name in _demos(_engine(args)):
+    for name, _, _walk in _demos(_engine(args)):
         wanted = {"VARN_GUI_DEMO": name}
 
         if name == "screens/network":
@@ -313,13 +628,18 @@ def shots(args: argparse.Namespace) -> None:
 
         shot_list.append((name.replace("/", "-"), wanted))
 
+    shot_list = [entry for entry in shot_list if args.only in entry[0]]
+
+    if not shot_list:
+        raise SystemExit(f"no screen matched {args.only}")
+
     project = ROOT / "apps" / "ios"
     subprocess.run(["xcodegen", "generate", "--quiet"], cwd=project, check=True)
 
     derived = ROOT / ".build" / "ios"
     subprocess.run(
         [
-            "xcodebuild", "-project", "VarnGUIGallery.xcodeproj", "-scheme", "VarnGUIGallery",
+            "xcodebuild", "-project", "VarnGUI.xcodeproj", "-scheme", "VarnGUI",
             "-configuration", "Debug", "-destination", f"platform=iOS Simulator,id={device}",
             "-derivedDataPath", str(derived), "build",
         ],
@@ -328,11 +648,17 @@ def shots(args: argparse.Namespace) -> None:
         stdout=subprocess.DEVNULL,
     )
 
-    app = derived / "Build" / "Products" / "Debug-iphonesimulator" / "VarnGUIGallery.app"
+    app = derived / "Build" / "Products" / "Debug-iphonesimulator" / "VarnGUI.app"
     subprocess.run(["xcrun", "simctl", "boot", device], check=False)
     subprocess.run(["xcrun", "simctl", "install", device, str(app)], check=True)
 
-    for appearance in ("light", "dark"):
+    # A screen that asks for a device puts a system alert over whatever is on the simulator, and nobody
+    # is here to answer it: it stays up across the relaunch and is in the picture of every screen after.
+    for wanted in ("camera", "microphone", "location"):
+        subprocess.run(["xcrun", "simctl", "privacy", device, "grant", wanted, bundle], check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    for appearance in _appearances(args):
         subprocess.run(["xcrun", "simctl", "ui", device, "appearance", appearance], check=True)
 
         for name, wanted in shot_list:
@@ -345,11 +671,9 @@ def shots(args: argparse.Namespace) -> None:
 
             subprocess.run(["xcrun", "simctl", "launch", device, bundle], check=True,
                            env=environment, stdout=subprocess.DEVNULL)
-            time.sleep(args.settle)
 
             target = output / f"ios-{appearance}-{name}.png"
-            subprocess.run(["xcrun", "simctl", "io", device, "screenshot", str(target)], check=True,
-                           stderr=subprocess.DEVNULL)
+            _capture(device, target, args.settle, args.patience)
             print(f"  {target}")
 
     subprocess.run(["xcrun", "simctl", "terminate", device, bundle], check=False,
@@ -376,15 +700,28 @@ def main() -> None:
 
     tasks.add_parser("web", help="assemble the framework, the gallery and the engine for the page").set_defaults(run=web)
 
+    server = tasks.add_parser("serve", help="assemble the page and serve it, which is how a browser opens it")
+    server.add_argument("--port", type=int, default=8000, help="the port to answer on")
+    server.set_defaults(run=serve)
+
     native = tasks.add_parser("fetch-native", help="download the framework and archive the apps link against")
     native.add_argument("--platform", choices=["all", "ios", "android", "web"], default="all")
     native.set_defaults(run=fetch_native)
 
-    shooter = tasks.add_parser("shots", help="screenshot every gallery screen on the iOS simulator")
+    shooter = tasks.add_parser("shots", help="screenshot every gallery screen on a platform")
+    shooter.add_argument("--platform", choices=["all", "ios", "web"], default="all")
     shooter.add_argument("--device", default="booted", help="the simulator udid, or booted")
     shooter.add_argument("--output", default="docs/screenshots", help="where the images are written")
-    shooter.add_argument("--settle", type=float, default=1.5, help="seconds to let a screen settle")
+    shooter.add_argument("--only", default="", help="capture only the screens whose name carries this")
+    shooter.add_argument("--appearance", choices=["all", "light", "dark"], default="all")
+    shooter.add_argument("--settle", type=float, default=1.5, help="seconds between looks at a screen")
+    shooter.add_argument("--patience", type=float, default=15.0,
+                         help="seconds to keep waiting for a screen that is still changing")
     shooter.set_defaults(run=shots)
+
+    tasks.add_parser("reference", help="write the component table from the declarations").set_defaults(
+        run=reference
+    )
 
     checker = tasks.add_parser("doctor", help="validate an application archive")
     checker.add_argument("archive")

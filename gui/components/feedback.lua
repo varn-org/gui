@@ -3,6 +3,8 @@ local component = require("gui.component")
 local content = require("gui.components.content")
 local input = require("gui.components.input")
 local structure = require("gui.components.structure")
+local drawn = require("gui.controls.drawn")
+local parts = require("gui.controls.parts")
 local support = require("gui.components.support")
 
 local M = {}
@@ -14,7 +16,8 @@ local View = structure.View
 --- What each size of a spinner measures, which is what the platforms themselves draw them at.
 local SPINNERS = { small = 20, medium = 32, large = 44 }
 
-M.ActivityIndicator = support.host("activity", {
+M.ActivityIndicator = support.component("ActivityIndicator", {
+    platform = "activity",
     natural = { size = function(props)
         local side = SPINNERS[props.size] or SPINNERS.medium
         return { width = side, height = side }
@@ -27,9 +30,10 @@ M.ActivityIndicator = support.host("activity", {
             return support.expected("size", spec.size, choices)
         end
     end,
-})
+}, drawn.spinner)
 
-M.ProgressBar = support.host("progress", {
+M.ProgressBar = support.component("ProgressBar", {
+    platform = "progress",
     natural = { size = function(props) return { height = props.thickness } end },
     style = function(spec) return { radius = spec.thickness / 2 } end,
     props = { "value", "indeterminate", "color", "trackColor", "thickness" },
@@ -39,7 +43,22 @@ M.ProgressBar = support.host("progress", {
             return "a determinate bar needs a value between zero and one"
         end
     end,
-})
+}, drawn.progress)
+
+--- A progress drawn round rather than straight, which is the same number along a different path.
+---
+--- It carries no platform node because neither phone draws one: what a system draws round is a spinner,
+--- which says that something is happening rather than how much of it is done. A control that cannot be
+--- handed to the platform says so by naming none, and a control theme that tries is told.
+M.ProgressCircle = support.component("ProgressCircle", {
+    props = { "value", "indeterminate", "color", "trackColor", "thickness" },
+    defaults = { indeterminate = false, thickness = 4 },
+    validate = function(spec)
+        if not spec.indeterminate and spec.value == nil then
+            return "a determinate circle needs a value between zero and one"
+        end
+    end,
+}, drawn.circle)
 
 --- One shaded box standing in for something that has not arrived, which is what a skeleton is made of.
 local Shade = support.host("skeleton", {
@@ -80,10 +99,15 @@ M.Skeleton = support.component("Skeleton", {
     name = "Skeleton",
 
     render = function(self)
+        local theme = parts.themeOf(self)
         local lines = self.props.lines
+        local look = {
+            radius = self.props.shape == "circle" and "pill" or theme:metric("skeleton", "radius"),
+            background = parts.paint(theme, "skeleton", "block", {}),
+        }
 
         if lines == 1 then
-            return Shade { shape = self.props.shape, style = self.props.style }
+            return Shade { shape = self.props.shape, style = { look, self.props.style } }
         end
 
         local bars = {}
@@ -92,11 +116,15 @@ M.Skeleton = support.component("Skeleton", {
             bars[#bars + 1] = Shade {
                 key = "line:" .. index,
                 shape = self.props.shape,
-                style = { width = index == lines and "60%" or "100%" },
+                extent = theme:metric("skeleton", "height"),
+                style = { look, { width = index == lines and "60%" or "100%" } },
             }
         end
 
-        return View { style = { { gap = "xs" }, self.props.style }, table.unpack(bars) }
+        return View {
+            style = { { gap = theme:metric("skeleton", "gap") }, self.props.style },
+            table.unpack(bars),
+        }
     end,
 }))
 
@@ -135,14 +163,14 @@ local Pill = support.host("badge", {
         }
 
         if spec.dot then
-            look.width = 10
-            look.height = 10
+            look.width = spec.dotSize or 10
+            look.height = spec.dotSize or 10
             look.paddingHorizontal = 0
         end
 
         return look
     end,
-    props = { "text", "dot", "color", "textColor" },
+    props = { "text", "dot", "dotSize", "color", "textColor" },
     defaults = { dot = false },
 })
 
@@ -155,14 +183,28 @@ M.Badge = support.component("Badge", {
     defaults = { dot = false, max = 99 },
 }, component.define({
     name = "Badge",
+
     render = function(self)
+        local theme = parts.themeOf(self)
+        local size = theme:metric("badge", "size")
+
         return Pill {
             -- A badge is as wide as what it says, never as wide as the box it happens to sit in.
-            style = { { alignSelf = "start" }, self.props.style },
+            style = {
+                {
+                    alignSelf = "start",
+                    minWidth = size,
+                    minHeight = size,
+                    radius = theme:metric("badge", "radius"),
+                    paddingHorizontal = self.props.dot and 0 or theme:metric("badge", "paddingHorizontal"),
+                },
+                self.props.style,
+            },
             text = counted(self.props),
             dot = self.props.dot,
-            color = self.props.color,
-            textColor = self.props.textColor,
+            dotSize = theme:metric("badge", "dot"),
+            color = self.props.color or parts.paint(theme, "badge", "container", {}),
+            textColor = self.props.textColor or parts.paint(theme, "badge", "label", {}),
         }
     end,
 }))
@@ -185,23 +227,41 @@ M.Chip = support.component("Chip", {
     name = "Chip",
 
     render = function(self)
-        local ground = "surface"
-        local ink = "text"
-
-        if self.props.selected then
-            ground = self.props.color or "primary"
-            ink = "onPrimary"
-        end
+        -- A chip nobody chose is drawn with an edge rather than a fill alone, since a fill is only a
+        -- shape against a ground that differs from it and a chip does not know the ground it stands on.
+        -- Standing on the surface it is filled with, it would otherwise be a label and nothing else.
+        local theme = parts.themeOf(self)
+        local about = { on = self.props.selected == true, disabled = self.props.disabled == true }
+        local ground = self.props.selected and self.props.color
+            or parts.paint(theme, "chip", "container", about)
+        local ink = parts.paint(theme, "chip", "label", about)
 
         return Pressable {
             style = {
-                { direction = "row", align = "center", gap = "xs", minHeight = chrome.touch,
-                    paddingHorizontal = "md", radius = "pill", background = ground },
+                {
+                    direction = "row",
+                    align = "center",
+                    gap = theme:metric("chip", "gap"),
+                    minHeight = chrome.touch,
+                    paddingHorizontal = theme:metric("chip", "paddingHorizontal"),
+                    radius = theme:metric("chip", "radius"),
+                    background = ground,
+                    border = theme:metric("chip", "border"),
+                    borderColor = parts.paint(theme, "chip", "outline", about),
+                },
                 self.props.style,
             },
             accessibilityLabel = self.props.label,
+            accessibilityRole = self.props.onPress ~= nil and "button" or "none",
+            accessibilityState = { selected = about.on, disabled = about.disabled },
+            focusable = self.props.onPress ~= nil,
             disabled = self.props.disabled,
             onPress = self.props.onPress,
+            onKeyDown = function(key)
+                if parts.chooses(key.key) and self.props.onPress ~= nil then
+                    self.props.onPress()
+                end
+            end,
 
             Text {
                 key = "label",
@@ -225,12 +285,16 @@ M.Chip = support.component("Chip", {
 
 --- A face, or the letters standing in for one, in a circle or a rounded square.
 ---
---- It is built here rather than handed to three renderers: a picture is an `Image` and letters are a
---- `Text`, and none of the three drew a picture for one at all, so every avatar carrying a source was
---- an empty circle. What hangs off its corner is placed outside the clipped box, or the badge would be
---- cut off by the very rounding that makes the avatar a circle.
+--- It is built here rather than handed to three renderers, since a picture is an `Image` and letters
+--- are a `Text` and neither is worth a node of its own on three platforms. What hangs off its corner is
+--- placed outside the clipped box, or the badge is cut off by the very rounding that makes it a circle.
+--- A face, or the initials that stand in for one where there is no picture.
+---
+--- `color` paints the ground the initials sit on. A row of faces all drawn on the same grey is a list a
+--- reader cannot tell apart at a glance, which is why every application that draws initials picks a
+--- colour for each of them.
 M.Avatar = support.component("Avatar", {
-    props = { "source", "initials", "size", "shape", "badge" },
+    props = { "source", "initials", "size", "shape", "badge", "color", "textColor" },
     defaults = { size = 40, shape = "circle" },
     validate = function(spec)
         if spec.source == nil and spec.initials == nil then
@@ -241,8 +305,9 @@ M.Avatar = support.component("Avatar", {
     name = "Avatar",
 
     render = function(self)
+        local theme = parts.themeOf(self)
         local size = self.props.size or 40
-        local corners = self.props.shape == "circle" and size / 2 or "md"
+        local corners = self.props.shape == "circle" and size / 2 or theme:metric("avatar", "radius")
 
         return View {
             style = { { width = size, height = size }, self.props.style },
@@ -250,7 +315,10 @@ M.Avatar = support.component("Avatar", {
             View {
                 key = "face",
                 style = { position = "absolute", top = 0, right = 0, bottom = 0, left = 0,
-                    radius = corners, background = "surface", overflow = "hidden",
+                    radius = corners,
+                    background = self.props.color or parts.paint(theme, "avatar", "container", {}),
+                    border = theme:metric("avatar", "border"),
+                    overflow = "hidden",
                     align = "center", justify = "center" },
 
                 self.props.source ~= nil and content.Image {
@@ -264,7 +332,9 @@ M.Avatar = support.component("Avatar", {
                     key = "initials",
                     text = self.props.initials,
                     numberOfLines = 1,
-                    style = { color = "textMuted", fontWeight = "600", fontSize = math.max(11, size / 2.6) },
+                    style = { color = self.props.textColor or parts.paint(theme, "avatar", "label", {}),
+                        fontWeight = "600",
+                        fontSize = math.max(11, size / 2.6) },
                 } or false,
             },
 
@@ -277,7 +347,8 @@ M.Avatar = support.component("Avatar", {
     end,
 }))
 
-M.Card = support.host("card", {
+M.Card = support.component("Card", {
+    platform = "card",
     style = function(spec)
         local look = { background = "background", radius = "md", shadow = spec.elevation }
 
@@ -296,9 +367,10 @@ M.Card = support.host("card", {
     props = { "elevation", "padded", "outlined" },
     events = { "onPress" },
     defaults = { elevation = "sm", padded = true, outlined = false },
-})
+}, drawn.card)
 
-M.Tooltip = support.host("tooltip", {
+M.Tooltip = support.component("Tooltip", {
+    platform = "tooltip",
     natural = { text = "text" },
     style = {
         background = "text",
@@ -315,6 +387,6 @@ M.Tooltip = support.host("tooltip", {
             return "needs the text to show"
         end
     end,
-})
+}, drawn.tooltip)
 
 return M

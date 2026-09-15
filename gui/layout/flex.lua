@@ -460,7 +460,6 @@ local function mainSizeOf(box, child, mainAvailable, crossAvailable)
 end
 
 --- Answers whether the container decides this child's cross size rather than the child itself.
---- Answers whether the container decides this child's cross size rather than the child itself.
 ---
 --- A control the platform gave a size to keeps it. A switch is fifty-one points across because that is
 --- what a switch is, and one stretched down a tablet is a control drawn in the corner of a box the whole
@@ -476,7 +475,11 @@ local function stretches(box, child, row)
     local natural = child.node.natural
 
     if natural ~= nil then
-        local given = row and natural.height or natural.width
+        local given = natural.width
+
+        if row then
+            given = natural.height
+        end
 
         if given ~= nil and given > 0 then
             return false
@@ -631,8 +634,17 @@ layout = function(box, availableWidth, availableHeight)
     end
 
     local row = box.row
-    local mainAvailable = row and contentWidth or contentHeight
-    local crossAvailable = row and contentHeight or contentWidth
+
+    -- Written as one `and`/`or` this hands a row the height it has whenever its width is unknown, since
+    -- the `and` yields nil and the `or` takes the other branch. A chip inside a horizontal scroll was
+    -- then measured against its own 44 points of touch height and its label came back clipped to that.
+    local mainAvailable = contentHeight
+    local crossAvailable = contentWidth
+
+    if row then
+        mainAvailable = contentWidth
+        crossAvailable = contentHeight
+    end
 
     -- Along the axis it scrolls, a view gives its children all the room they ask for.
     --
@@ -731,12 +743,15 @@ layout = function(box, availableWidth, availableHeight)
             local childMain = child.mainSize
             local stretched = stretches(box, child, row) and definiteCross or nil
 
-            -- A child given a share of a definite size has a definite size of its own to share on.
+            -- A child given a share of a definite size has a definite size of its own to share on, and
+            -- the share it was given is the box itself rather than the room the box takes up: adding its
+            -- own margins back makes everything inside it centre against a box larger than it is, which
+            -- is a label sitting below the middle of every cell that carries one.
             if definiteMain ~= nil then
                 if row then
-                    child.stretchWidth = childMain + child.margin.left + child.margin.right
+                    child.stretchWidth = childMain
                 else
-                    child.stretchHeight = childMain + child.margin.top + child.margin.bottom
+                    child.stretchHeight = childMain
                 end
             end
             if stretched ~= nil then

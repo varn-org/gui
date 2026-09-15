@@ -75,6 +75,63 @@ do
         "a tree " .. DEPTH .. " deep measured its one string " .. watch.measurements .. " times")
 end
 
+-- A screen the size of a real one is laid out again for the price of laying it out.
+--
+-- Coming back off a screen felt slow on the phone and nothing here described a tree that size: the
+-- budget above is one string twenty-four levels down, which says what recursion costs and nothing about
+-- what a screen costs. This lays out the gallery's own index with a demo open on top of it, which is
+-- about two hundred nodes, and relays the whole of it the way a rotation does.
+--
+-- The numbers are generous because a machine under load is the machine this runs on. What they catch is
+-- an order of magnitude: a layout that stops memoising, a measurement cache that stops answering, or a
+-- pass added over the whole tree.
+do
+    local watch = watched()
+    local runtime = start(app.root, watch)
+
+    local opened = nil
+
+    for _, node in pairs(runtime.byId) do
+        if node.props ~= nil and node.props.onPress ~= nil and node.type ~= "scroll" then
+            opened = opened or node
+        end
+    end
+
+    assert(opened ~= nil, "the index must carry something to open")
+
+    runtime:dispatch(opened.id, "onPress", nil)
+    drain(runtime)
+
+    local held = 0
+
+    for _ in pairs(runtime.byId) do
+        held = held + 1
+    end
+
+    assert(held > 120, "the tree must be the size of a real screen, it holds " .. held)
+
+    watch.measurements = 0
+
+    local ROUNDS = 10
+    local started = os.clock()
+
+    for round = 1, ROUNDS do
+        runtime:resize(round % 2 == 0 and 390 or 391, 844)
+        drain(runtime)
+    end
+
+    local spent = (os.clock() - started) * 1000 / ROUNDS
+
+    assert(spent < 120,
+        "a screen of " .. held .. " nodes took " .. string.format("%.0f", spent) .. " ms to lay out again")
+
+    -- Every string on the screen was measured on the way in, and a width one point different does not
+    -- make any of them a different question. A cache too small for one screen answers none of them.
+    assert(watch.measurements / ROUNDS < 12,
+        "laying the screen out again measured " .. string.format("%.0f", watch.measurements / ROUNDS)
+            .. " strings a commit, which the cache should have answered")
+end
+
 -- A prop written as a literal is compared by what it says, whichever prop it is.
 --
 -- A style was, and the four props that carry a list of their own were not: an icon's drawing, a rich
@@ -258,6 +315,109 @@ do
     drain(runtime)
 
     assert(opsSince(watch, before) > 0, "scrolling onto new rows must reach the renderer")
+end
+
+-- A screen of drawn controls costs what a screen of the platform's own costs, near enough.
+--
+-- A drawn control is several nodes where a native one is one, so a screen of fifty of them is a few
+-- hundred nodes rather than fifty. What matters is not the count but whether the layout and the bridge
+-- still hold: a design chosen for how it looks cannot cost a reader the frame rate.
+do
+    local controls = require("gui.controls")
+
+    local function screenOf(theme)
+        local rows = {}
+
+        for index = 1, 40 do
+            rows[index] = gui.View {
+                key = tostring(index),
+                style = { direction = "row", align = "center", justify = "space-between", gap = "md" },
+
+                gui.Text { text = "Row " .. index },
+                gui.Switch { accessibilityLabel = "Row " .. index, value = index % 2 == 0 },
+            }
+        end
+
+        local watch = watched()
+        local runtime = gui.start(gui.ScrollView { style = { grow = 1 }, table.unpack(rows) },
+            watch.renderer, { size = { width = 390, height = 844 }, controls = theme })
+
+        drain(runtime)
+        return runtime, watch
+    end
+
+    local held = {}
+
+    for _, theme in ipairs({ controls.native, controls.material3 }) do
+        local runtime, watch = screenOf(theme)
+        local nodes = 0
+
+        for _ in pairs(runtime.byId) do
+            nodes = nodes + 1
+        end
+
+        watch.measurements = 0
+
+        local ROUNDS = 10
+        local started = os.clock()
+
+        for round = 1, ROUNDS do
+            runtime:resize(round % 2 == 0 and 390 or 391, 844)
+            drain(runtime)
+        end
+
+        held[#held + 1] = {
+            name = theme.name,
+            nodes = nodes,
+            spent = (os.clock() - started) * 1000 / ROUNDS,
+        }
+
+        runtime:stop()
+    end
+
+    local platform = held[1]
+    local drawn = held[2]
+
+    assert(drawn.nodes > platform.nodes,
+        "a drawn control is more nodes than a native one, which is the cost being measured")
+
+    assert(drawn.spent < 120, "a screen of " .. drawn.nodes .. " drawn nodes took "
+        .. string.format("%.0f", drawn.spent) .. " ms to lay out again")
+
+    -- The cost of drawing rather than handing over is the thing to watch, so it is asserted rather than
+    -- left to be noticed: four times the layout for three times the nodes is the engine, not the design.
+    assert(drawn.spent < math.max(24, platform.spent * 4),
+        "drawing the controls cost " .. string.format("%.1f", drawn.spent) .. " ms against "
+        .. string.format("%.1f", platform.spent) .. " ms for the platform's own")
+end
+
+-- One press on a drawn control sends what one press is worth, and nothing more.
+do
+    local controls = require("gui.controls")
+    local watch = watched()
+    local runtime = gui.start(gui.View {
+        gui.Switch { accessibilityLabel = "One", value = false, onChange = function() end },
+    }, watch.renderer, { size = { width = 390, height = 844 }, controls = controls.material3 })
+
+    drain(runtime)
+
+    local pressed = nil
+
+    for _, node in pairs(runtime.byId) do
+        if node.props.accessibilityRole == "switch" then
+            pressed = node
+        end
+    end
+
+    local before = #watch.renderer.batches
+
+    runtime:dispatch(pressed.id, "onPressIn", nil)
+    drain(runtime)
+
+    local ops = opsSince(watch, before)
+
+    assert(ops > 0, "pressing a drawn control reaches the renderer")
+    assert(ops <= 6, "one press on a drawn control sent " .. ops .. " operations")
 end
 
 print("gui.performance ok")

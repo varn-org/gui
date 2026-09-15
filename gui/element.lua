@@ -2,7 +2,6 @@ local M = {}
 
 local ELEMENT = {}
 
-
 --- Answers whether a value is an element rather than a prop or a plain table.
 function M.isElement(value)
     return type(value) == "table" and rawget(value, "__element") == ELEMENT
@@ -41,26 +40,8 @@ local function collect(spec)
     return props, children
 end
 
-local function flatten(children, into)
-    for index = 1, #children do
-        local child = children[index]
-
-        if M.isElement(child) then
-            into[#into + 1] = child
-        elseif type(child) == "table" then
-            flatten(child, into)
-        elseif type(child) == "string" or type(child) == "number" then
-            into[#into + 1] = M.new("text", { text = tostring(child) }, {})
-        else
-            error("a child must be an element, a list of them, or a string, got " .. type(child), 3)
-        end
-    end
-
-    return into
-end
-
 --- Builds an element of the given type from already separated props and children.
-function M.new(kind, props, children)
+local function new(kind, props, children)
     return {
         __element = ELEMENT,
         type = kind,
@@ -70,6 +51,24 @@ function M.new(kind, props, children)
     }
 end
 
+local function flatten(children, into)
+    for index = 1, #children do
+        local child = children[index]
+
+        if M.isElement(child) then
+            into[#into + 1] = child
+        elseif type(child) == "table" then
+            flatten(child, into)
+        elseif type(child) == "string" or type(child) == "number" then
+            into[#into + 1] = new("text", { text = tostring(child) }, {})
+        else
+            error("a child must be an element, a list of them, or a string, got " .. type(child), 3)
+        end
+    end
+
+    return into
+end
+
 --- Returns a constructor for a node type, taking props and children in one table.
 ---
 --- The array part of the table becomes the children and everything else becomes the props, so a
@@ -77,7 +76,7 @@ end
 function M.define(kind)
     return function(spec)
         if spec == nil then
-            return M.new(kind, {}, {})
+            return new(kind, {}, {})
         end
 
         if type(spec) ~= "table" then
@@ -85,7 +84,7 @@ function M.define(kind)
         end
 
         local props, children = collect(spec)
-        return M.new(kind, props, flatten(children, {}))
+        return new(kind, props, flatten(children, {}))
     end
 end
 

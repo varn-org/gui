@@ -2,7 +2,17 @@
 <html lang="en">
 <head>
     <meta charset="utf-8" />
+    <!--
+        Where the page is served from, which is what every file it loads is named against.
+
+        An address a router pushes changes the path the browser is at, and a name written beside the page
+        would then be looked for under that path instead: the engine, the framework and the icon each
+        turn into a 404 the moment a reader follows a link. A page served from somewhere other than the
+        root says so here, in one place, rather than in every name it carries.
+    -->
+    <base href="/" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <link rel="icon" href="./favicon.png" />
     <title>Varn GUI Gallery</title>
     <style>
         :root {
@@ -12,12 +22,12 @@
             --safe-area-left: env(safe-area-inset-left, 0px);
         }
 
-        html, body { margin: 0; height: 100%; }
-        body { font: 15px/1.35 system-ui, sans-serif; }
-
-        /* The engine sends finished frames, so the surface is the only thing that positions anything. */
-        #surface { position: relative; width: 100%; height: 100%; overflow: hidden; }
-        #surface * { position: absolute; box-sizing: border-box; }
+        /*
+         * What the page is drawn in is the theme's rather than the page's: the ground, the colour it
+         * writes in, the face, the selection and the surface itself are all written by the renderer's own
+         * stylesheet, from what the engine sends it. A page that decided any of that would be a second
+         * design nobody could change from the application.
+         */
     </style>
 </head>
 <body>

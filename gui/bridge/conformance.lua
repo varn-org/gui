@@ -2,11 +2,20 @@ local protocol = require("gui.bridge.protocol")
 
 local M = {}
 
---- The capabilities a renderer may declare, so a component needing one can fail loudly without it.
+--- The states an application is in, which every platform distinguishes and which mean different things.
+---
+--- Active is in front and taking input. Inactive is in front and not taking input — a call arriving, the
+--- control centre pulled down, a window losing focus — which is where a game pauses and a video need
+--- not. Background is out of sight and may be ended without another word, which is where everything a
+--- reader would miss is saved.
+M.states = { "active", "inactive", "background" }
+
+--- The capabilities a renderer may declare, which a screen reads before it draws what needs one.
 M.capabilities = {
     "text", "image", "list", "scroll", "input", "video", "webview", "canvas",
     "picker", "datepicker", "haptics", "safearea", "fontBytes", "imageBytes",
-    "audio", "map", "location", "gradient", "blur",
+    "audio", "map", "location", "gradient", "nineSlice", "blur", "camera", "microphone",
+    "systemBars",
 }
 
 local function tree(renderer)
@@ -150,6 +159,28 @@ M.cases = {
         end,
     },
     {
+        name = "hangs a layer from the surface rather than from where it was written",
+        run = function(renderer)
+            renderer:apply({
+                { op = "create", id = 1, type = "view", props = {} },
+                { op = "insert", id = 1, parent = 0, index = 1 },
+                { op = "create", id = 2, type = "view", props = {} },
+                { op = "insert", id = 2, parent = 1, index = 1 },
+                { op = "create", id = 3, type = "layer", props = {} },
+                { op = "insert", id = 3, parent = 2, index = 1 },
+                { op = "create", id = 4, type = "text", props = { text = "over it" } },
+                { op = "insert", id = 4, parent = 3, index = 1 },
+            })
+
+            local roots = tree(renderer)
+
+            assert(#roots == 2, "a layer stands beside the application, found " .. #roots .. " roots")
+            assert(roots[2].type == "layer", "and over it rather than under it")
+            assert(#roots[1].children[1].children == 0, "nothing of it is left where it was written")
+            assert(roots[2].children[1].props.text == "over it", "and what it holds came with it")
+        end,
+    },
+    {
         name = "refuses a batch that breaks the contract",
         run = function(renderer)
             local ok = pcall(renderer.apply, renderer, { { op = "update", id = 1 } })
@@ -197,11 +228,25 @@ M.cases = {
                 "space asked for between letters is space the line needs, got "
                     .. spaced.width .. " against " .. plain.width)
 
+            -- A line is a multiple of the size, and it means that on every platform: asked as a
+            -- multiple of the face's own line instead, the same tree is a different height on each.
             local tall = renderer:measureText("spacing", { fontSize = 16, lineHeight = 3 }, nil)
 
-            assert(tall.height > plain.height,
-                "and space asked for between lines is space the paragraph needs, got "
-                    .. tall.height .. " against " .. plain.height)
+            assert(math.abs(tall.height - 48) <= 1,
+                "a line is a multiple of the size, so one string at three of them is 48, got " .. tall.height)
+        end,
+    },
+    {
+        name = "a string carries the lines it was written with",
+        run = function(renderer)
+            local one = renderer:measureText("one", { fontSize = 16 }, nil)
+            local three = renderer:measureText("one\ntwo\nthree", { fontSize = 16 }, nil)
+
+            -- A line inside a block is not quite a line on its own, since the leading around a single
+            -- one is not repeated, so three lines are about three times one rather than exactly.
+            assert(three.height > one.height * 2.5 and three.height < one.height * 3.5,
+                "a label of three lines is about three lines tall, got "
+                    .. three.height .. " against " .. one.height)
         end,
     },
     {
@@ -269,6 +314,20 @@ M.cases = {
             })
 
             assert(only(tree(renderer)).props.value == "Ada", "the field must hold the value it was given")
+        end,
+    },
+    {
+        name = "paints its own ground from the theme",
+        run = function(renderer)
+            renderer:showTheme({ appearance = "dark", background = "#101014ff", text = "#e7e2eaff", primary = "#8c9effff", family = "Roboto" })
+
+            renderer:apply({
+                { op = "create", id = 1, type = "view", props = {} },
+                { op = "insert", id = 1, parent = 0, index = 1 },
+            })
+
+            assert(renderer.ground.background == "#101014ff", "the ground it was given is what it paints")
+            assert(renderer.ground.appearance == "dark", "and the scheme it was told to be in")
         end,
     },
     {

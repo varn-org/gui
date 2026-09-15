@@ -78,6 +78,36 @@ class ControlsTest {
         assertEquals(listOf(10.0), reported())
     }
 
+    /**
+     * The bounds of a stepper hold whatever order the props of a batch arrive in.
+     *
+     * A json object carries its fields in no order at all, so a value clamped as it arrives is clamped
+     * against whichever bound happened to be applied first — and a range narrower than the value it is
+     * given leaves the readout showing a number the tree said was out of reach.
+     */
+    @Test
+    fun aStepperIsHeldToItsBoundsWhateverOrderTheyArriveIn() {
+        val view = control("stepper", mapOf("value" to 50)) as VarnStepperView
+
+        assertEquals("a stepper nobody bounded keeps what it was given", 50.0, view.value, 0.001)
+
+        renderer.apply(
+            JSONArray(
+                listOf(
+                    JSONObject(
+                        mapOf(
+                            "op" to "update",
+                            "id" to 1,
+                            "props" to JSONObject(mapOf("value" to 50, "minimum" to 0, "maximum" to 10)),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals("and one that was bounded is held to them", 10.0, view.value, 0.001)
+    }
+
     @Test
     fun aChooserReportsTheValueOfWhatWasChosen() {
         val options = JSONArray(

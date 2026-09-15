@@ -55,3 +55,14 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/VarnGUIRendererTestHost.app/VarnGUIRendererTestHost
         BUNDLE_LOADER: $(TEST_HOST)
+
+# Xcode invents a scheme per target and skips test bundles, so the one the suite is run under is named
+# here rather than left to whatever a version of Xcode decides to call it.
+schemes:
+  VarnGUIRendererTests:
+    build:
+      targets:
+        VarnGUIRendererTests: [test]
+    test:
+      targets:
+        - VarnGUIRendererTests

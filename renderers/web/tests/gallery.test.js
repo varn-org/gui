@@ -1,23 +1,47 @@
 // Runs the sample application the way a browser runs it: the released wasm engine, the whole Lua
-// framework, the real DOM renderer, and the same archive the phones load.
+// framework, the same archive the phones load, and the renderer as the page carries it.
+//
+// The host is imported out of `apps/web` rather than from the sources beside this file, since that
+// folder is what a static host serves and what a browser loads: a page importing its way out of it is a
+// blank screen and a 404 in a console nobody had open.
 //
 // It needs the engine, which `python3 run.py fetch-native --platform web` puts in apps/web, and the
-// framework and gallery that `python3 run.py web` assembles beside it. It skips rather than fails when
-// any of them is absent, so this runs wherever they are available and stays quiet where they are not.
+// framework, the gallery and the renderer that `python3 run.py web` assembles beside it. It skips rather
+// than fails when any of them is absent, so this runs wherever they are available and stays quiet where
+// they are not.
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { install } from "../dom.js";
-import { WebHost } from "../host.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../../..");
-const page = resolve(root, "apps/web");
-const needed = ["varn_wasm.js", "varn_wasm.wasm", "framework.zip", "gallery.vap"].map((name) => resolve(page, name));
+const page = resolve(root, "apps/web/dist");
 
-if (needed.some((path) => !existsSync(path))) {
+// Every file the page loads carries the hash of what it holds, so what is asked for here is the kind of
+// file rather than its name, which is what a browser reading the page does as well.
+function assembled(kind, extension) {
+    if (!existsSync(page)) {
+        return undefined;
+    }
+
+    const name = readdirSync(page)
+        .find((entry) => entry.startsWith(`${kind}.`) && entry.endsWith(extension));
+
+    return name === undefined ? undefined : resolve(page, name);
+}
+
+const carried = [
+    assembled("varn_wasm", ".js"),
+    assembled("varn_wasm", ".wasm"),
+    assembled("framework", ".zip"),
+    assembled("gallery", ".vap"),
+    assembled("host", ".js"),
+];
+
+if (carried.some((path) => path === undefined)) {
     console.log("web.gallery skipped: run `python3 run.py fetch-native --platform web` then `python3 run.py web`");
     process.exit(0);
 }
@@ -58,8 +82,9 @@ function counted(host, type) {
     return total;
 }
 
-const factory = (await import(resolve(page, "varn_wasm.js"))).default;
-const module = await factory({ wasmBinary: readFileSync(resolve(page, "varn_wasm.wasm")) });
+const { WebHost } = await import(assembled("host", ".js"));
+const factory = (await import(assembled("varn_wasm", ".js"))).default;
+const module = await factory({ wasmBinary: readFileSync(assembled("varn_wasm", ".wasm")) });
 
 const host = new WebHost(module, surface);
 
@@ -68,8 +93,8 @@ const host = new WebHost(module, surface);
 let problem;
 host.onProblem = (reported) => { problem = reported; };
 
-await host.installFramework("./framework.zip");
-await host.install("./gallery.vap", "gallery.vap");
+await host.installFramework(assembled("framework", ".zip"));
+await host.install(assembled("gallery", ".vap"), "gallery.vap");
 host.start();
 
 // The engine is advanced the way the page advances it, one tick at a time, until the page has settled.
@@ -102,8 +127,9 @@ assert(root_.style.height === "844px", `the root must fill the surface, got ${ro
 const painted = [...host.renderer.nodes.values()].find((node) => node.props.style?.background !== undefined);
 assert(painted !== undefined, "something on the page must carry a background");
 assert(
-    painted.element.style.background.startsWith("#") || painted.element.style.background.startsWith("rgb"),
-    `a colour must reach the page resolved, got ${painted.element.style.background}`,
+    painted.element.style.backgroundColor.startsWith("#")
+        || painted.element.style.backgroundColor.startsWith("rgb"),
+    `a colour must reach the page resolved, got ${painted.element.style.backgroundColor}`,
 );
 
 // Opening a demo from the index reaches Lua and comes back as a different tree.

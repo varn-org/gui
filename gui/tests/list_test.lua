@@ -1,4 +1,5 @@
 local gui = require("gui")
+local waitFor = require("gui.tests.waiting")
 
 local function rows(count)
     local data = {}
@@ -440,6 +441,47 @@ do
     assert(titles == 1, "a header at the top must be drawn once, was drawn " .. titles .. " times")
 end
 
+-- A size a list divides by is refused where it is written, rather than where it is divided.
+--
+-- A minimum column width of nought is a grid of infinitely many columns, which is a loop the frame
+-- never comes back from: no failure, nothing on screen, a phone that has to be closed. An extent of
+-- nought is the same division one row further down, and an autoplay of nought is a timer that fires
+-- as fast as the loop will let it.
+do
+    local function draw(item) return gui.Text { text = item.label } end
+
+    local refused = {
+        { "columns", gui.Grid, { data = rows(4), renderItem = draw, columns = 0 } },
+        { "columns", gui.Grid, { data = rows(4), renderItem = draw, columns = 2.5 } },
+        { "minColumnWidth", gui.Grid, { data = rows(4), renderItem = draw, minColumnWidth = 0 } },
+        { "rowExtent", gui.Grid, { data = rows(4), renderItem = draw, rowExtent = 0 } },
+        { "rowExtent", gui.Grid, { data = rows(4), renderItem = draw, rowExtent = function() return 40 end } },
+        { "itemExtent", gui.List, { data = rows(4), renderItem = draw, itemExtent = 0 } },
+        { "itemExtent", gui.List, { data = rows(4), renderItem = draw, itemExtent = -20 } },
+        { "itemExtent", gui.SectionList,
+          { sections = { { key = "one", data = rows(4) } }, renderItem = draw,
+            renderHeader = function() return gui.Text { text = "one" } end, itemExtent = 0 } },
+        { "autoplayInterval", gui.Carousel, { data = rows(4), renderItem = draw, autoplayInterval = 0 } },
+    }
+
+    for index = 1, #refused do
+        local named, build, props = table.unpack(refused[index])
+        local ok, problem = pcall(build, props)
+
+        assert(not ok, named .. " of " .. tostring(props[named]) .. " must be refused")
+        assert(tostring(problem):find(named, 1, true) ~= nil,
+            "and the refusal must name it, got " .. tostring(problem))
+    end
+
+    -- A grid asked for as wide a column as it can fit is a grid, rather than one refused for carrying
+    -- a count nobody wrote.
+    local _, renderer = start(gui.Grid { data = rows(9), minColumnWidth = 150, rowExtent = 80, renderItem = draw },
+        { width = 320, height = 480 })
+
+    assert(surfaceOf(renderer, "grid").props.columns == 2,
+        "a minimum column width fits as many columns as the width allows")
+end
+
 -- A grid arranges its entries in rows of the column count it was given.
 do
     local _, renderer = start(gui.Grid {
@@ -597,7 +639,6 @@ do
         end
 
         renderer.calls = {}
-        async.sleep(60):await()
 
         return renderer
     end
@@ -611,6 +652,9 @@ do
             renderItem = function(item) return gui.Text { text = item.label } end,
         })
 
+        -- Nothing is waited for here, since what is being proven is that nothing happens.
+        async.sleep(60):await()
+
         assert(not wrapped(held), "without being told it may, it stops at the last page")
 
         local looping = played({
@@ -621,6 +665,8 @@ do
             loop = true,
             renderItem = function(item) return gui.Text { text = item.label } end,
         })
+
+        waitFor(function() return wrapped(looping) end)
 
         assert(wrapped(looping), "told it may loop, it comes back round to the first entry")
         print("gui.list ok")

@@ -20,7 +20,10 @@ function M.directory(name)
         error("the application has not been told where it may write", 2)
     end
 
-    if type(name) ~= "string" or name == "" or name:find("[/\\]") ~= nil then
+    -- A name is a name: a separator points somewhere else, and so does a name made of dots alone, which
+    -- is the whole of what "may write here" is worth if either one is let through.
+    if type(name) ~= "string" or name == "" or name == "." or name == ".."
+        or name:find("[/\\]") ~= nil then
         error("a directory is named, not pathed, got " .. tostring(name), 2)
     end
 

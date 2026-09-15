@@ -214,9 +214,9 @@ end
 -- State set to false is false, which is not the same thing as state that is not there.
 --
 -- Written as `value ~= none and value or nil`, false is the middle of an `and`/`or` and Lua takes the
--- other branch for it, so every state a screen set to false was stored as nothing at all. It reads as
--- false everywhere except against false itself, which is where it surfaced: a drawer asking whether it
--- was open compared its state with false, got nil, and never closed.
+-- other branch for it, storing every state a screen sets to false as nothing at all. Nothing reads as
+-- false except against false itself, which is where it shows: a drawer asking whether it is open
+-- compares its state with false, gets nil, and never closes.
 do
     local Toggling = gui.component({
         name = "Toggling",

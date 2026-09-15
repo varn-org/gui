@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "dev.varn.gui.gallery"
+    namespace = "dev.varn.gui.app"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "dev.varn.gui.gallery"
+        applicationId = "dev.varn.gui"
         minSdk = 24
         targetSdk = 35
         versionCode = 1

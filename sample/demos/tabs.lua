@@ -237,17 +237,19 @@ local Cover = gui.component({
 --- A row that answers a swipe with something other than what a press does, which is what a gesture is for.
 local Gestures = gui.component({
     name = "GesturesDemo",
-    state = { said = "Press a row, or swipe one" },
+    state = { said = "Press a row, or swipe one", under = "" },
 
     Row = function(self, label)
         return gui.Pressable {
             key = label,
             style = { height = 60, direction = "row", align = "center", paddingHorizontal = "md",
-                background = "background" },
+                background = self.state.under == label and "surface" or "background" },
             accessibilityLabel = label,
             onPress = function() self:setState({ said = label .. " was pressed" }) end,
             onLongPress = function() self:setState({ said = label .. " was held" }) end,
             onSwipe = function(swipe) self:setState({ said = label .. " was swiped " .. swipe.direction }) end,
+            onHoverIn = function() self:setState({ under = label }) end,
+            onHoverOut = function() self:setState({ under = "" }) end,
 
             gui.Text { text = label, style = { grow = 1 } },
             gui.Icon { name = "chevron-right", size = 16, color = "textMuted" },
@@ -259,7 +261,7 @@ local Gestures = gui.component({
             gui.View { style = { padding = "md", gap = "xs" },
                 gui.Text { text = "Gestures", style = { fontSize = "title", fontWeight = "700" } },
                 gui.Text {
-                    text = "A swipe is not a press. Each row answers the gesture the finger actually made.",
+                    text = "A swipe is not a press, and a pointer resting over a row is neither. Each row answers what it was actually given.",
                     style = { color = "textMuted" },
                 },
                 gui.Text { text = self.state.said, style = { fontWeight = "600", color = "primary" } },
@@ -281,12 +283,7 @@ local Paged = gui.component({
     state = { tab = 1 },
 
     render = function(self)
-        local pages = self.pages
-
-        if pages == nil then
-            pages = gui.ref()
-            self.pages = pages
-        end
+        local pages = self:ref("pages")
 
         local tabs = {}
 

@@ -79,6 +79,64 @@ local PEOPLE = {
         },
         replies = { "Glad it helped" },
     },
+    {
+        key = "mira",
+        name = "Mira Solberg",
+        face = "https://picsum.photos/id/1011/200/200",
+        status = "Active 20 minutes ago",
+        online = true,
+        when = "08:12",
+        unread = 0,
+        said = "Sent you the times for Thursday",
+        history = {
+            { key = "m1", mine = false, text = "Sent you the times for Thursday", at = "08:12" },
+            { key = "m2", mine = true, text = "Perfect, four works", at = "08:14" },
+        },
+        replies = { "Booked", "See you then" },
+    },
+    {
+        key = "olu",
+        name = "Olu Adeyemi",
+        face = "https://picsum.photos/id/1013/200/200",
+        status = "Active an hour ago",
+        online = false,
+        when = "Yesterday",
+        unread = 0,
+        said = "The photos came out well",
+        history = {
+            { key = "o1", mine = true, text = "How did they look?", at = "19:02" },
+            { key = "o2", mine = false, text = "The photos came out well", at = "19:20" },
+        },
+        replies = { "I will send the rest tonight" },
+    },
+    {
+        key = "hana",
+        name = "Hana Petrov",
+        face = "https://picsum.photos/id/1027/200/200",
+        status = "Active on Sunday",
+        online = false,
+        when = "Aug 04",
+        unread = 0,
+        said = "Thank you, that was exactly it",
+        history = {
+            { key = "h1", mine = false, text = "Thank you, that was exactly it", at = "12:46" },
+        },
+        replies = { "Any time" },
+    },
+    {
+        key = "tobias",
+        name = "Tobias Wren",
+        face = "https://picsum.photos/id/1025/200/200",
+        status = "Active in July",
+        online = false,
+        when = "Jul 22",
+        unread = 0,
+        said = "Left the key under the pot",
+        history = {
+            { key = "w1", mine = false, text = "Left the key under the pot", at = "07:30" },
+        },
+        replies = { "Got it, thanks" },
+    },
 }
 
 local HEADER = { "primary", "#7C6BF2" }
@@ -155,7 +213,11 @@ local Conversation = gui.component({
 
             gui.View { style = { align = "end", gap = 6 },
                 gui.Text { text = person.when, style = { fontSize = "caption", color = "textMuted" } },
-                self.props.unread > 0 and gui.Badge { key = "unread", value = self.props.unread } or false,
+                self.props.unread > 0 and gui.Badge {
+                    key = "unread",
+                    value = self.props.unread,
+                    style = { alignSelf = "end" },
+                } or false,
             },
         }
     end,
@@ -163,7 +225,7 @@ local Conversation = gui.component({
 
 local Chat = gui.component({
     name = "Chat",
-    state = { open = nil, said = {}, draft = "", typing = false, place = "inbox", read = {} },
+    state = { said = {}, draft = "", typing = false, place = "inbox", read = {}, search = "", menu = false },
 
     --- Answers the person a key names, which is what the open conversation is.
     person = function(self, key)
@@ -285,18 +347,20 @@ local Chat = gui.component({
 
     Inbox = function(self)
         local rows = {}
+        local wanted = self.state.search:lower()
 
         for index = 1, #PEOPLE do
             local person = PEOPLE[index]
+            local matches = wanted == "" or person.name:lower():find(wanted, 1, true) ~= nil
 
-            rows[index] = gui.View { key = person.key,
+            rows[index] = matches and gui.View { key = person.key,
                 Conversation {
                     person = person,
                     unread = self:waiting(person),
                     onOpen = function() self:open(person) end,
                 },
                 index < #PEOPLE and gui.Divider { key = "line", inset = 80 } or false,
-            }
+            } or false
         end
 
         local waiting = 0
@@ -305,11 +369,15 @@ local Chat = gui.component({
             waiting = waiting + self:waiting(PEOPLE[index])
         end
 
+        local insets = gui.environment:read(self).insets
+
         return gui.View { style = { grow = 1, background = "background" },
+            -- The header runs to the top of the glass and keeps the clock clear of what it holds, which
+            -- is what the inset says rather than a number guessed at for one phone.
             gui.Gradient {
                 colors = HEADER,
                 direction = "diagonal",
-                style = { paddingTop = 56, paddingBottom = 28, paddingHorizontal = "md",
+                style = { paddingTop = insets.top + 12, paddingBottom = 28, paddingHorizontal = "md",
                     radius = 28, gap = 6 },
 
                 gui.View { style = { direction = "row", align = "center" },
@@ -319,7 +387,7 @@ local Chat = gui.component({
                         accessibilityLabel = "Search",
                         style = { width = 44, height = 44, radius = "pill", align = "center", justify = "center",
                             background = "#FFFFFF33" },
-                        onPress = function() end,
+                        onPress = function() self:setState({ searching = not self.state.searching }) end,
                         gui.Icon { name = "search", size = 20, color = "onPrimary" },
                     },
                 },
@@ -329,18 +397,27 @@ local Chat = gui.component({
                         or ("You have " .. waiting .. " unread messages"),
                     style = { color = "#FFFFFFCC", fontSize = "footnote" },
                 },
+
+                self.state.searching and gui.SearchBar {
+                    key = "search",
+                    value = self.state.search,
+                    placeholder = "Search the conversations",
+                    onChange = function(value) self:setState({ search = value }) end,
+                } or false,
             },
 
-            gui.ScrollView { style = { grow = 1 }, contentStyle = { paddingBottom = 96 },
+            gui.ScrollView {
+                style = { grow = 1 },
+                contentStyle = { paddingBottom = 76 + insets.bottom },
                 table.unpack(rows),
             },
 
-            self:Places(),
+            self:Places(insets),
         }
     end,
 
     --- The bar the inbox stands on, drawn on the material the platform puts behind one.
-    Places = function(self)
+    Places = function(self, insets)
         local items = {}
 
         for index = 1, #PLACES do
@@ -367,7 +444,7 @@ local Chat = gui.component({
             intensity = 0.92,
             tint = "background",
             style = { position = "absolute", left = 0, right = 0, bottom = 0, direction = "row",
-                paddingBottom = 6 },
+                paddingBottom = insets.bottom + 6 },
             table.unpack(items),
         }
     end,
@@ -393,11 +470,13 @@ local Chat = gui.component({
 
         -- The composer is the last row rather than a panel over the messages, so the keyboard lifts it
         -- rather than covering it.
+        local insets = gui.environment:read(self).insets
+
         return gui.KeyboardAvoiding { style = { grow = 1, background = "background" },
             gui.Gradient {
                 colors = HEADER,
                 direction = "right",
-                style = { paddingTop = 52, paddingBottom = 14, paddingHorizontal = "sm",
+                style = { paddingTop = insets.top + 8, paddingBottom = 14, paddingHorizontal = "sm",
                     direction = "row", align = "center", gap = "sm", radius = 24 },
 
                 gui.Pressable {
@@ -419,7 +498,7 @@ local Chat = gui.component({
                 gui.Pressable {
                     accessibilityLabel = "More",
                     style = { width = 44, height = 44, align = "center", justify = "center" },
-                    onPress = function() end,
+                    onPress = function() self:setState({ menu = true }) end,
                     gui.Icon { name = "more-vertical", size = 20, color = "onPrimary" },
                 },
             },
@@ -435,8 +514,8 @@ local Chat = gui.component({
             gui.Blur {
                 intensity = 0.9,
                 tint = "background",
-                style = { paddingHorizontal = "md", paddingVertical = 12, direction = "row",
-                    align = "center", gap = "sm" },
+                style = { paddingHorizontal = "md", paddingTop = 12, paddingBottom = 12 + insets.bottom,
+                    direction = "row", align = "center", gap = "sm" },
 
                 gui.TextInput {
                     value = self.state.draft,
@@ -456,7 +535,42 @@ local Chat = gui.component({
                     gui.Icon { name = "send", size = 18, color = "onPrimary" },
                 },
             },
+
+            gui.Menu {
+                visible = self.state.menu,
+                items = {
+                    { key = "read", label = "Mark as unread" },
+                    { key = "clear", label = "Clear the conversation", destructive = true },
+                },
+                onSelect = function(key) self:chose(key, person) end,
+                onDismiss = function() self:setState({ menu = false }) end,
+            },
         }
+    end,
+
+    --- Acts on what the menu over a conversation was asked for, which is what a menu is for.
+    chose = function(self, key, person)
+        local said = {}
+
+        for held, values in pairs(self.state.said) do
+            said[held] = values
+        end
+
+        if key == "clear" then
+            said[person.key] = {}
+        end
+
+        local read = {}
+
+        for held in pairs(self.state.read) do
+            read[held] = true
+        end
+
+        if key == "read" then
+            read[person.key] = nil
+        end
+
+        self:setState({ menu = false, said = said, read = read })
     end,
 
     render = function(self)

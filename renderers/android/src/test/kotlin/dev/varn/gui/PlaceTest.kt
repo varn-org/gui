@@ -1,6 +1,7 @@
 package dev.varn.gui
 
 import android.app.Activity
+import android.graphics.Bitmap
 import android.view.MotionEvent
 import android.widget.FrameLayout
 import org.json.JSONArray
@@ -290,6 +291,47 @@ class PlaceTest {
             header.translationY,
             0.5f,
         )
+
+        // A row realised while the surface scrolls is inserted where the tree puts it, which is after
+        // the header it belongs under, so the header has to be drawn over what arrives beneath it.
+        renderer.apply(
+            JSONArray(
+                listOf(
+                    JSONObject(mapOf("op" to "create", "id" to 8, "type" to "view", "props" to JSONObject())),
+                    JSONObject(mapOf("op" to "insert", "id" to 8, "parent" to 6, "index" to 2)),
+                    JSONObject(mapOf("op" to "frame", "id" to 8, "x" to 0, "y" to 1200,
+                        "width" to 390, "height" to 44)),
+                ),
+            ),
+        )
+
+        assertEquals(
+            "a row that arrives beneath a held box does not cover it",
+            header,
+            list.content.getChildAt(list.content.childCount - 1),
+        )
     }
 
+    /**
+     * A tile is the same picture for every map, so what one fetched is there for the next one to open.
+     *
+     * A store of its own per map is a screen that re-fetches the world every time a reader comes back
+     * to it, which is bandwidth on a phone and the one thing the tile service asks a client not to do.
+     */
+    @Test
+    fun `a map that has gone leaves its tiles for the one that opens next`() {
+        val first = map(mapOf("center" to JSONObject(mapOf("latitude" to 0, "longitude" to 0)), "zoom" to 3))
+
+        VarnTiles.hold("3/1/1", Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888))
+
+        renderer.apply(JSONArray(listOf(JSONObject(mapOf("op" to "remove", "id" to 1)))))
+
+        assertTrue("the map that has gone asks for nothing more", first.closed)
+        assertNotNull("and what it fetched is still there to draw", VarnTiles.get("3/1/1"))
+
+        val second = map(mapOf("center" to JSONObject(mapOf("latitude" to 0, "longitude" to 0)), "zoom" to 3))
+
+        assertEquals("the next map draws from the same store", false, second.closed)
+        assertNotNull("without asking for the tile again", VarnTiles.get("3/1/1"))
+    }
 }

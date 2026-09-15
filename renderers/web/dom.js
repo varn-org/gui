@@ -49,6 +49,11 @@ class Element {
         this.text = "";
         this.selectionStart = 0;
         this.selectionEnd = 0;
+
+        // A media element holds where it has got to and how long it runs for, which is what a seek
+        // writes and reads back. A duration a browser has not read yet is not a number at all.
+        this.currentTime = 0;
+        this.duration = NaN;
     }
 
     // Writing a field's value puts the caret at the end of it, which is the browser behaviour a renderer
@@ -76,7 +81,16 @@ class Element {
         this.selectionEnd = this.text.length;
     }
 
+    // Whether the element sits in a tree, which is what the host asks before it puts a banner up again.
+    get isConnected() {
+        return this.parentNode !== null;
+    }
+
     appendChild(child) {
+        return this.insertBefore(child, null);
+    }
+
+    append(child) {
         return this.insertBefore(child, null);
     }
 
@@ -112,6 +126,14 @@ class Element {
         return this.attributes[name] ?? null;
     }
 
+    hasAttribute(name) {
+        return this.attributes[name] !== undefined;
+    }
+
+    removeAttribute(name) {
+        delete this.attributes[name];
+    }
+
     addEventListener(type, handler) {
         this.listeners.set(type, (this.listeners.get(type) ?? []).concat(handler));
     }
@@ -120,11 +142,26 @@ class Element {
         this.listeners.set(type, (this.listeners.get(type) ?? []).filter((entry) => entry !== handler));
     }
 
-    /** Fires a listener the way a browser would, which is how an event test reaches a handler. */
+    /** Fires a listener the way a browser would, which is how an event test reaches a handler.
+     *
+     * An event reaches the box around whatever raised it as well. A checkbox and its caption sit inside
+     * a label the renderer listens on, and the chooser a file button opens is what raises the change the
+     * button reports, so a renderer that leans on that has to be tested through it. */
     dispatch(type, event = {}) {
-        for (const handler of this.listeners.get(type) ?? []) {
-            handler(event);
+        const raised = event.target === undefined ? { ...event, target: this } : event;
+
+        for (let at = this; at !== null; at = at.parentNode) {
+            for (const handler of at.listeners.get(type) ?? []) {
+                handler(raised);
+            }
         }
+    }
+
+    /** Presses the element from script, which is what a return on a control does and what a label does
+     * to the control it holds. A browser reports no finger behind such a press, which is how one is told
+     * from a pointer that travelled. */
+    click() {
+        this.dispatch("click", { type: "click", detail: 0 });
     }
 
     focus() {
@@ -177,9 +214,38 @@ export function install() {
 
     const document = {
         createElement: (tag) => new Element(tag),
+        // A filter is declared as a drawing rather than as an element of the page, and outside a browser
+        // a drawing is an element like any other: what a test reads back is the attributes it was given.
+        createElementNS: (_namespace, tag) => new Element(tag),
         documentElement: root,
+        body: new Element("body"),
         getElementById: (id) => root.children.find((child) => child.id === id) ?? null,
         fonts: { add() {} },
+        baseURI: "http://localhost/",
+
+        // A page tells the host where it is through the document rather than through the window, and a
+        // stand-in without that is a suite agreeing with itself about a host that never starts.
+        visibilityState: "visible",
+        hasFocus: () => true,
+        fullscreenElement: null,
+        // Many listeners may watch one event, which is what a page relies on: the host watches a page
+        // being hidden both to say the application went away and to give back what it is holding.
+        listening: new Map(),
+        addEventListener(name, handler) {
+            const watching = document.listening.get(name) ?? [];
+
+            watching.push(handler);
+            document.listening.set(name, watching);
+        },
+        removeEventListener(name, handler) {
+            const watching = document.listening.get(name) ?? [];
+            document.listening.set(name, watching.filter((each) => each !== handler));
+        },
+        dispatch(name, event) {
+            for (const handler of document.listening.get(name) ?? []) {
+                handler(event ?? { type: name });
+            }
+        },
     };
 
     globalThis.atob = (text) => Buffer.from(text, "base64").toString("binary");
@@ -205,6 +271,15 @@ export function install() {
     globalThis.document = document;
     globalThis.window = { devicePixelRatio: 2 };
     globalThis.getComputedStyle = () => ({ getPropertyValue: () => "0" });
+
+    // A page is always at an address and always has a history, and the host reads both: where the
+    // application was asked to be is what a router opens on, and where it goes is what the browser keeps.
+    globalThis.location = { pathname: "/", search: "", href: "http://localhost/" };
+    globalThis.history = {
+        pushState(_state, _title, where) { globalThis.location.pathname = new URL(where, "http://localhost/").pathname; },
+        replaceState(_state, _title, where) { globalThis.location.pathname = new URL(where, "http://localhost/").pathname; },
+        back() {},
+    };
 
     return new Element("div");
 }

@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "VarnGUIGallery"
+rootProject.name = "VarnGUI"
 include(":app")

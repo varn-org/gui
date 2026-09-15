@@ -2,6 +2,15 @@ import UIKit
 
 /// Shows the gallery, which is the packed archive the Android and web hosts run unchanged.
 final class GalleryViewController: UIViewController {
+    /// The link the application was opened with, which a router opens on rather than at its own start.
+    var opened = "/"
+
+    /// Takes a link that arrives while the application is running, which is what a deep link does.
+    func open(address: String) {
+        opened = address
+        host?.open(address: address)
+    }
+
     private var host: VarnGUIHost?
     private weak var banner: UIView?
     private let surface = UIView()
@@ -9,6 +18,14 @@ final class GalleryViewController: UIViewController {
     /// Draws the system's own bars the way the tree asked for, which only the window's controller may say.
     override var preferredStatusBarStyle: UIStatusBarStyle {
         VarnSystemBars.style
+    }
+
+    override var prefersStatusBarHidden: Bool {
+        VarnSystemBars.hidesStatusBar
+    }
+
+    override var prefersHomeIndicatorAutoHidden: Bool {
+        VarnSystemBars.dimsHomeIndicator
     }
 
     override func viewDidLoad() {
@@ -20,6 +37,11 @@ final class GalleryViewController: UIViewController {
         view.addSubview(surface)
 
         start()
+    }
+
+    /// Says the surface is finished with, which is what takes the tree and the pump down with it.
+    deinit {
+        host?.stop()
     }
 
     private func start() {
@@ -43,7 +65,7 @@ final class GalleryViewController: UIViewController {
 
         do {
             // The gui tree sits beside the archive in the bundle, so the resources directory is the root.
-            try host.start(archive: archive, framework: resources, cache: cache)
+            try host.start(archive: archive, framework: resources, cache: cache, address: opened)
         } catch {
             report("the gallery failed to start: \(error)")
         }
@@ -51,8 +73,8 @@ final class GalleryViewController: UIViewController {
 
     /// Shows what went wrong as something a reader can put away, rather than as part of the screen.
     ///
-    /// Drawn into the view it stayed there for the rest of the session, carried from screen to screen by
-    /// a reader who had no way of dismissing it.
+    /// Drawn into the view a message stays for the rest of the session, carried from screen to screen by
+    /// a reader with no way of dismissing it.
     private func report(_ message: String) {
         banner?.removeFromSuperview()
 

@@ -1,0 +1,35 @@
+# 🗺️ Roadmap
+
+What is covered, and what is genuinely still open. An item closes by moving into `docs/review.md` with what was built, tested and documented — a roadmap that lists shipped work as missing is worse than no roadmap.
+
+## Already covered
+
+Forms, with the rules every framework ships and a caller's own beside them. An editor over styled text, where what is selected and marked is the text itself rather than a field beside a preview. Layout, styling, theming, the palette and the responsive scale. The framework's own typeface, registered before the first layout on every platform, and a project's own beside it. The bar and the shape a screen is built into. Binding, so a change reaches what read it rather than what holds it. The component library in [components.md](components.md), every entry of it drawn in the sample. Lists, sections, grids and carousels with windowing and reuse. Navigation, tabs, overlays and presence, drawn through a portal so what covers the application covers all of it. Looks, each one design with light and dark on either side of it, chosen from any screen, with what the platform paints around the tree painted from the same look. The camera, the microphone, and the pictures and films they capture, with a look drawn over the preview and written into a photograph, and `gui.files` to keep one where the platform keeps pictures or hand it to the system's own way of sending it. Pictures, fonts, canvas drawing, maps, location, video, sound and web views. `gui.preferences`, which keeps what an application must find again where each platform keeps a secret. The application's own lifecycle, in the three states every platform distinguishes, with what the engine owns stopping while it is away and a component told at both moments. What a box can say about being seen, which the engine works out from the frames it laid out rather than three renderers agreeing by luck. The system's own bars, which a screen may keep, hide or draw its own marks in. Frames drawn from artwork, where one small picture cut into nine paints a window, a dialogue or a button of any size without the ornament on its corners being pulled out of shape. What an application is told and when, mapped in [events.md](events.md) against what UIKit, the Android view system and Flutter each report, with a key event, a double press and where a caret sits built to close the gaps it found. A continuous drag, which is the one gesture a box has to claim: `panAxis` says which axis it is taking and the surface under it keeps the other, arbitrated where each platform arbitrates rather than by counting points here. Controls drawn by the engine under a control theme that says what each is built out of, beside the platform's own under `native`, in [controls.md](controls.md). A subtree in a look of its own, so one tree carries several palettes. The sample, which is eleven whole applications and one screen per subject, five of them built after the kind of product a reader already has on their phone, in [sample.md](sample.md). The bridge, the three renderers, the conformance suite, the browser suite, and the screenshots on the simulator and in a browser.
+
+## Open
+
+### 1. Desktop, and drawing inside something else
+
+The renderers are three today and the contract is written for more. What a desktop or a game host needs is the same bridge with a surface it owns, which is what `docs/porting.md` describes — nothing here assumes a browser or a phone, and the two things that would are the chrome and the safe area, both already read from the surface rather than from a name.
+
+### 2. What a commit costs on a large screen
+
+Coming back off a screen felt slow on the phone, and the cost is measured rather than guessed at. On a tree the size of the gallery's own — its index with a demo open on top, about two hundred nodes — a commit that lays the whole of it out again takes tens of milliseconds on a laptop and about ten times that on a phone. `gui/tests/performance_test.lua` describes exactly that tree, so the number is guarded, and two real defects found inside it are closed and recorded in [review.md](review.md).
+
+Seventy per cent of the commit is the layout, and the layout lays each box out about twelve times. Of four thousand one hundred box layouts on a pop of that tree, two thousand six hundred are leaves answered from the memo and eight hundred and fifty-seven are containers asked a question they have answered before. That last number is what a subtree memo would be for, and it cannot be taken with this algorithm. A box's last question and the state its subtree is in are the same thing, which is what `settled` already checks and already replays. The eight hundred and fifty-seven are the cases where the question was answered at some *earlier* point and not the last one, which means the subtree has since been left somewhere else — so replaying the size would hand back a box whose children disagree with it, and re-laying the subtree to fix that is the work being avoided in the first place.
+
+So this is not a cache that is missing. It is the cost of a flex layout that sizes in more than one pass, and closing it means changing how sizing works rather than remembering more — a single-pass model, or a measurement that does not need the subtree laid out to answer. That is a piece of engine work with a correctness argument attached, which is why it is written down here rather than attempted in passing.
+
+### 3. A pinch
+
+All three platforms have one and it is a real capability: a photograph zoomed, a map scaled. What a pinch needs beyond a drag is a second pointer and an arbitration between scaling and scrolling that differs again on each of the three, and nothing in the library needs it — a drag is what a slider and a swipe action are, and a pinch is what a photograph viewer is. It is written up in [events.md](events.md) beside everything else that is deliberately not there.
+
+### 4. Aligning a row on its baselines
+
+A row aligns its children on `start`, `center` or `end`, and the one alignment it does not have is the one a price row wants. A large number beside a small label — `Total` beside `R$ 2.799`, a rating beside how many left it, a mark beside the line it belongs to — centres two boxes of different heights, so their centres line up and the text sitting in them does not. It is a few points and it reads as slightly off rather than as broken, which is why it went unnoticed until five applications were drawn that are mostly price rows.
+
+What it needs is the first baseline of each child, and a text node's baseline is not derivable from what a renderer answers today: `measureText` answers a width and a height, and where the glyphs sit inside that height is the platform's. So closing this is a third field across the three renderers and a rule for what the baseline of a box that holds no text is — which is a contract change with a correctness argument attached rather than something to attempt in passing.
+
+## Open defects
+
+None. Everything found so far is closed and held to by a test, which is what [review.md](review.md) records.

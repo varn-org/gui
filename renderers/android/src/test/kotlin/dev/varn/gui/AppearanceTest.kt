@@ -10,6 +10,7 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -64,7 +65,7 @@ class AppearanceTest {
      * A file picker asks the host to open a chooser rather than opening one itself.
      *
      * An activity's result belongs to the activity that started it, and the renderer holds no activity,
-     * which is what would leak one on a rotation. It declared nothing but a title before this, so it was
+     * which is what would leak one on a rotation. A bar that declares only a title is one nothing was
      * a bare button that did nothing at all.
      */
     @Test
@@ -262,6 +263,114 @@ class AppearanceTest {
         val bar = node("progress", mapOf("value" to 0.5, "thickness" to 2)) as android.widget.ProgressBar
 
         assertTrue("a bar must take the thickness it was given, got ${bar.minimumHeight}", bar.minimumHeight > 0)
+    }
+
+    @Test
+    fun `a picture is drawn through the colour matrix a filter came to`() {
+        val grey = listOf(
+            0.2126, 0.7152, 0.0722, 0.0, 0.0,
+            0.2126, 0.7152, 0.0722, 0.0, 0.0,
+            0.2126, 0.7152, 0.0722, 0.0, 0.0,
+            0.0, 0.0, 0.0, 1.0, 0.0,
+        )
+
+        val picture = node("image", mapOf("source" to "logo.png", "filter" to JSONArray(grey)))
+
+        assertTrue("a filtered picture is drawn through one", (picture as VarnPictureView).colorFilter != null)
+    }
+
+    @Test
+    fun `a tint and a filter do not fight over the one filter a picture is drawn through`() {
+        val grey = listOf(
+            0.2126, 0.7152, 0.0722, 0.0, 0.0,
+            0.2126, 0.7152, 0.0722, 0.0, 0.0,
+            0.2126, 0.7152, 0.0722, 0.0, 0.0,
+            0.0, 0.0, 0.0, 1.0, 0.0,
+        )
+
+        // A tint replaces the colours of a picture outright, so it is what a picture carrying both is
+        // drawn in whichever order the props of a batch happened to arrive in.
+        val picture = node(
+            "image",
+            mapOf("source" to "logo.png", "filter" to JSONArray(grey), "tint" to "#ff0000ff"),
+        ) as VarnPictureView
+
+        assertEquals("a tinted picture is drawn in the colour it was tinted", 0xffff0000.toInt(), picture.tint)
+
+        renderer.apply(
+            JSONArray(
+                listOf(
+                    JSONObject(
+                        mapOf(
+                            "op" to "update",
+                            "id" to 1,
+                            "props" to JSONObject(mapOf("tint" to "__varn_removed__")),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertTrue("and the filter is still there once the tint has gone", picture.colorFilter != null)
+    }
+
+    @Test
+    fun `a camera carries what it was told and reports through one closure`() {
+        val grey = listOf(
+            0.2126, 0.7152, 0.0722, 0.0, 0.0,
+            0.2126, 0.7152, 0.0722, 0.0, 0.0,
+            0.2126, 0.7152, 0.0722, 0.0, 0.0,
+            0.0, 0.0, 0.0, 1.0, 0.0,
+        )
+
+        val camera = node(
+            "camera",
+            mapOf(
+                "facing" to "front",
+                "zoom" to 2.0,
+                "torch" to true,
+                "audio" to true,
+                "filter" to JSONArray(grey),
+                "onCapture" to true,
+            ),
+        ) as VarnCameraView
+
+        assertEquals("which way it is looking is what it was told", "front", camera.facing)
+        assertEquals("and so is how far in it is", 2f, camera.zoom, 0.001f)
+        assertTrue("and whether the light is on", camera.torch)
+        assertTrue("and the look it is drawn through", camera.filter != null)
+
+        // Everything a camera produces travels under the name it produced it as, since one closure
+        // carries all four rather than a listener being bound per event.
+        camera.onEvent?.invoke("onCapture", JSONObject().put("path", "/somewhere/photo.jpg"))
+
+        assertEquals("what it produced is reported under its own name", "onCapture", events.first().second)
+    }
+
+    @Test
+    fun `a film is drawn through the same matrix a picture is`() {
+        val grey = listOf(
+            0.2126, 0.7152, 0.0722, 0.0, 0.0,
+            0.2126, 0.7152, 0.0722, 0.0, 0.0,
+            0.2126, 0.7152, 0.0722, 0.0, 0.0,
+            0.0, 0.0, 0.0, 1.0, 0.0,
+        )
+
+        val film = node("video", mapOf("source" to "clip.mp4", "filter" to JSONArray(grey))) as VarnVideoView
+
+        assertTrue("a film carries the matrix it was sent", film.filter != null)
+    }
+
+    @Test
+    fun `a camera is the only thing that can be asked to capture`() {
+        node("view", mapOf<String, Any?>())
+
+        try {
+            renderer.invoke(1, "capturePhoto", JSONObject())
+            fail("asking a box for a picture is a caller's mistake rather than silence")
+        } catch (problem: RuntimeException) {
+            // The action was refused, which is what the case is asserting.
+        }
     }
 
     @Test

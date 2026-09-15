@@ -21,7 +21,7 @@ gui.View {
 | `easing` | The curve it is drawn with | `easeOut` |
 | `delay` | How long to wait first, in milliseconds | `0` |
 
-A duration may be written as `instant`, `fast`, `normal` or `slow`, and a transition written as a bare duration is one with everything else left at its default:
+A duration may be written as `instant`, `fast`, `normal` or `slow`, and a transition written as a bare duration is one with everything else left at its default. Anything that is not a length of time — a table, a negative number, a delay written as a word — is refused where it is written, since a duration reaches three renderers as a number of milliseconds and each of them makes something different of anything else:
 
 ```lua
 transition = "fast"

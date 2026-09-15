@@ -5,7 +5,6 @@ local M = {}
 --- A renderer answering this must clear the prop rather than set it, since nil cannot travel in a table.
 M.removed = setmetatable({}, { __tostring = function() return "removed" end })
 
-
 --- What each operation carries, and what each of those has to be.
 ---
 --- A field of the wrong type reaches every renderer as something it reads as nothing: a width that is

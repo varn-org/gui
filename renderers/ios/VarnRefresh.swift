@@ -74,6 +74,7 @@ enum VarnRefresh {
 enum VarnSystemBars {
     private static var owner: ObjectIdentifier?
     private static var wanted: String?
+    private static var shown: Set<String> = ["status", "navigation"]
 
     /// Records what one area asks for, which stands until that area asks for something else or leaves.
     static func claim(_ content: String?, by claimant: ObjectIdentifier) {
@@ -86,6 +87,12 @@ enum VarnSystemBars {
         wanted = content
     }
 
+    /// Records which of the system's own bars an area still wants the reader to see.
+    static func claim(bars: [String], by claimant: ObjectIdentifier) {
+        owner = claimant
+        shown = Set(bars)
+    }
+
     /// Gives up what an area asked for, so a screen that has gone does not decide what is over the next one.
     static func release(_ claimant: ObjectIdentifier) {
         guard owner == claimant else {
@@ -94,6 +101,21 @@ enum VarnSystemBars {
 
         owner = nil
         wanted = nil
+        shown = ["status", "navigation"]
+    }
+
+    /// Whether the clock and what sits beside it are drawn over the application.
+    public static var hidesStatusBar: Bool {
+        !shown.contains("status")
+    }
+
+    /// Whether the line a reader swipes to leave is drawn, which iOS dims rather than removes.
+    ///
+    /// The platform will not take it away. What `prefersHomeIndicatorAutoHidden` does is let it fade
+    /// while nothing is touched and bring it back at a touch, which is as far as iOS goes and is what a
+    /// game gets. Saying so is better than pretending the line is gone.
+    public static var dimsHomeIndicator: Bool {
+        !shown.contains("navigation")
     }
 
     /// Answers the style the window should draw its bars in, or the one the system would have chosen.

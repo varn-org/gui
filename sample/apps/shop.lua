@@ -5,17 +5,20 @@ local gui = require("gui")
 --- The point of this is not the components it happens to use. It is that a whole application is one
 --- tree of state: what is in the bag, what is being looked at and how far through checkout it has got
 --- are ordinary fields, and every screen is a function of them.
+--- The catalogue, drawn rather than downloaded.
+---
+--- A picture that comes from a photograph service is whatever that service happened to answer with: the
+--- grid showed strawberries under `Shell Chair` and a piano under `Trestle Table`. The artwork here is
+--- drawn from the shape of the thing it stands for, by `tools/draw-products.py`, in one palette.
 local PRODUCTS = {
     {
         key = "chair",
         name = "Shell Chair",
         maker = "Kestrel",
+        group = "Seating",
         price = 340,
         blurb = "Moulded ply over a steel frame, in three finishes.",
-        pictures = {
-            "https://picsum.photos/id/1080/800/800",
-            "https://picsum.photos/id/1084/800/800",
-        },
+        picture = "product-chair.png",
         sizes = { "Low", "Standard", "Counter" },
         colours = { "Walnut", "Ash", "Charcoal" },
     },
@@ -23,9 +26,10 @@ local PRODUCTS = {
         key = "lamp",
         name = "Arc Lamp",
         maker = "Kestrel",
+        group = "Lighting",
         price = 185,
         blurb = "A weighted base and a shade you can point anywhere.",
-        pictures = { "https://picsum.photos/id/1060/800/800" },
+        picture = "product-lamp.png",
         sizes = { "Table", "Floor" },
         colours = { "Brass", "Black" },
     },
@@ -33,9 +37,10 @@ local PRODUCTS = {
         key = "rug",
         name = "Flatweave Rug",
         maker = "Norden",
+        group = "Floors",
         price = 260,
         blurb = "Wool, woven flat, so it lies where you put it.",
-        pictures = { "https://picsum.photos/id/1076/800/800" },
+        picture = "product-rug.png",
         sizes = { "Small", "Medium", "Large" },
         colours = { "Sand", "Slate" },
     },
@@ -43,11 +48,34 @@ local PRODUCTS = {
         key = "table",
         name = "Trestle Table",
         maker = "Norden",
+        group = "Tables",
         price = 520,
         blurb = "Two trestles and a top, which comes apart to move.",
-        pictures = { "https://picsum.photos/id/1082/800/800" },
+        picture = "product-table.png",
         sizes = { "Four", "Six", "Eight" },
         colours = { "Oak", "Painted" },
+    },
+    {
+        key = "kettle",
+        name = "Stove Kettle",
+        maker = "Norden",
+        group = "Kitchen",
+        price = 74,
+        blurb = "Enamel over steel, with a handle that folds back.",
+        picture = "product-kettle.png",
+        sizes = { "One litre", "Two litres" },
+        colours = { "Plum", "Bone" },
+    },
+    {
+        key = "vase",
+        name = "Ribbed Vase",
+        maker = "Kestrel",
+        group = "Kitchen",
+        price = 48,
+        blurb = "Thrown, ribbed and fired twice, so it holds water.",
+        picture = "product-vase.png",
+        sizes = { "Short", "Tall" },
+        colours = { "Sea", "Clay" },
     },
 }
 
@@ -75,7 +103,6 @@ local Shop = gui.component({
     state = {
         screen = "window",
         looking = nil,
-        picture = 1,
         size = nil,
         colour = nil,
         quantity = 1,
@@ -140,7 +167,6 @@ local Shop = gui.component({
         self:setState({
             screen = "product",
             looking = key,
-            picture = 1,
             size = product.sizes[1],
             colour = product.colours[1],
             quantity = 1,
@@ -191,13 +217,30 @@ local Shop = gui.component({
     end,
 
     Window = function(self)
+        local insets = gui.environment:read(self).insets
+
         return gui.Grid {
-            style = { grow = 1, paddingHorizontal = "md", paddingTop = "md" },
+            style = { grow = 1, paddingHorizontal = "md" },
             data = PRODUCTS,
             columns = 2,
             spacing = 12,
             rowExtent = 232,
             keyExtractor = function(product) return product.key end,
+
+            header = gui.View { style = { paddingVertical = "md", gap = 2 },
+                gui.Text { text = "New this season", style = { fontSize = "title", fontWeight = "700" } },
+                gui.Text {
+                    text = #PRODUCTS .. " pieces from two makers",
+                    style = { fontSize = "footnote", color = "textMuted" },
+                },
+            },
+
+            headerExtent = 70,
+
+            -- The grid runs under whatever the system draws over the bottom of the glass and stops above
+            -- it, so the last row is one a finger can reach rather than one under the indicator.
+            footer = gui.Spacer { size = insets.bottom + 16 },
+            footerExtent = insets.bottom + 16,
             renderItem = function(product)
                 return gui.Pressable {
                     style = { grow = 1, gap = "xs" },
@@ -205,7 +248,7 @@ local Shop = gui.component({
                     onPress = function() self:open(product.key) end,
 
                     gui.Image {
-                        source = product.pictures[1],
+                        source = product.picture,
                         resizeMode = "cover",
                         style = { height = 150, radius = "md", background = "surface" },
                     },
@@ -228,24 +271,20 @@ local Shop = gui.component({
             style = { grow = 1 },
             contentStyle = { gap = "md", padding = "md" },
 
-            gui.Carousel {
-                style = { height = 280 },
-                data = product.pictures,
-                index = self.state.picture,
-                onIndexChange = function(index) self:setState({ picture = index }) end,
-                keyExtractor = function(_, index) return index end,
-                renderItem = function(picture)
-                    return gui.Image {
-                        source = picture,
-                        resizeMode = "cover",
-                        style = { grow = 1, radius = "md", background = "surface" },
-                    }
-                end,
+            gui.Image {
+                source = product.picture,
+                resizeMode = "cover",
+                style = { height = 300, radius = "lg", background = "surface" },
             },
 
             gui.View { style = { gap = "xs" },
+                gui.Text {
+                    text = product.maker:upper() .. " · " .. product.group:upper(),
+                    style = { fontSize = "caption", fontWeight = "700", color = "textMuted",
+                        letterSpacing = 1 },
+                },
                 gui.Text { text = product.name, style = { fontSize = "heading", fontWeight = "700" } },
-                gui.Text { text = product.blurb, style = { color = "textMuted" } },
+                gui.Text { text = product.blurb, style = { color = "textMuted", lineHeight = 1.4 } },
                 gui.Text { text = money(product.price), style = { fontSize = "title", fontWeight = "700" } },
             },
 
@@ -286,11 +325,19 @@ local Shop = gui.component({
         local lines = self:lines()
 
         if #lines == 0 then
-            return gui.View { style = { grow = 1, justify = "center", align = "center", gap = "md" },
-                gui.Text { text = "Nothing in the bag yet", style = { color = "textMuted" } },
+            return gui.View {
+                style = { grow = 1, justify = "center", align = "center", gap = "sm", padding = "lg" },
+
+                gui.Icon { name = "bookmark", size = 40, color = "textMuted" },
+                gui.Text { text = "Nothing in the bag yet", style = { fontSize = "headline", fontWeight = "600" } },
+                gui.Text {
+                    text = "Anything you add shows up here, with what it comes to",
+                    style = { fontSize = "footnote", color = "textMuted", textAlign = "center" },
+                },
                 gui.Button {
                     title = "Have a look",
                     variant = "tinted",
+                    style = { marginTop = "sm" },
                     onPress = function() self:setState({ screen = "window" }) end,
                 },
             }
@@ -309,7 +356,7 @@ local Shop = gui.component({
                             paddingHorizontal = "md" },
 
                         gui.Image {
-                            source = line.product.pictures[1],
+                            source = line.product.picture,
                             resizeMode = "cover",
                             style = { width = 64, height = 64, radius = "sm", background = "surface" },
                         },
@@ -334,7 +381,10 @@ local Shop = gui.component({
                 end,
             },
 
-            gui.View { style = { padding = "md", gap = "sm", background = "surface" },
+            gui.View {
+                style = { padding = "md", paddingBottom = 16 + gui.environment:read(self).insets.bottom,
+                    gap = "sm", background = "surface" },
+
                 gui.View { style = { direction = "row", justify = "space-between" },
                     gui.Text { text = "Total", style = { fontWeight = "600" } },
                     gui.Text { text = money(self:total()), style = { fontWeight = "700" } },
@@ -471,20 +521,17 @@ local Shop = gui.component({
 
         -- The bag sits in the bar rather than over the application, or it is drawn on top of every
         -- menu, sheet and alert that opens under it.
-        local bag = gui.Pressable {
-            style = { minWidth = 44, minHeight = 44, justify = "center", align = "center" },
-            accessibilityLabel = "Bag",
-            onPress = function() self:setState({ screen = "bag" }) end,
-            gui.Text { text = "Bag", style = { color = "primary" } },
-            waiting > 0 and gui.Badge { value = waiting, style = { position = "absolute", top = 2, right = -6 } }
-                or false,
-        }
+        local bag = { key = "bag", label = "Bag", onPress = function() self:setState({ screen = "bag" }) end }
+
+        if waiting > 0 then
+            bag.badge = waiting
+        end
 
         return gui.NavigationStack {
             style = { grow = 1 },
             screens = screens,
             index = #screens,
-            actions = bag,
+            trailing = { bag },
             onPop = function() self:back() end,
         }
     end,

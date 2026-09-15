@@ -49,6 +49,8 @@ gui.View {
 
 A node with no size asks its content. A label asks the renderer what its string measures, an image takes its natural size, and a box with neither content nor size is zero.
 
+Along the axis it scrolls, a view gives its children all the room they ask for rather than the room it has, since squeezing them is the opposite of scrolling: a row of chips in a horizontal scroll keeps the width each label needs and runs off the edge, where a row that fitted them would wrap or clip them. Across the other axis it is an ordinary box. A control with a natural size on one axis and none on the other keeps the one it has an opinion about and fills the room it is given on the other, which is what a slider and a segmented control do.
+
 ## What a box remembers
 
 Sizing a container asks each child how large it is, shares out what is left and lays the child out for the share it was given. Asked directly that is two walks of a subtree per level, so a deep tree costs what it holds raised to its own depth, and a list scrolling on a tablet spends a whole frame in the layout before anything is drawn.
@@ -71,7 +73,7 @@ The same four shapes exist for `margin`. `border` is a width, and `borderColor` 
 
 ## Absolute positioning
 
-`position = "absolute"` takes a node out of flow and places it against its nearest positioned ancestor with `top`, `right`, `bottom` and `left`. Giving both edges of an axis stretches the node between them.
+`position = "absolute"` takes a node out of flow and places it inside the box that holds it, with `top`, `right`, `bottom` and `left` measured from that box's own padding. Every box is a box to be placed against, so there is no positioned ancestor to look for and none to declare. Giving both edges of an axis stretches the node between them, and a margin moves it off the edge it was pinned to, which is how a box of a known size is centred on one.
 
 ```lua
 gui.View {
@@ -119,6 +121,12 @@ gui.View { style = { padding = { compact = 12, medium = 20, expanded = 32 } } }
 ```
 
 The breakpoints come from the theme, so a project may name its own.
+
+## Folding phones, tablets and split windows
+
+A folding phone opened, a tablet, a window shared with another application and a phone turned sideways are one thing here: a width that changed. The surface is reported again, the breakpoint follows it, and the components that read either are rendered again — the rest of the tree is only laid out again, so what a reader had typed, chosen or scrolled to is still there afterwards. Write one tree that reads the room it has, the way `sample/demos/layout.lua` does, rather than one tree per device: two trees swapped at a threshold take everything under them down and build it again, and a turn of the phone loses what was in it.
+
+A hinge as a thing to lay out around — a physical seam between two panels — is not reported. The one platform with an API for it is Android's `androidx.window`, and this renderer is compiled from source into the application that uses it, so every application would have to carry that dependency.
 
 ## Reference and tests
 

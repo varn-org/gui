@@ -149,6 +149,25 @@ final class ConformanceTests: XCTestCase {
         XCTAssertEqual((tree(roots[1])[0] as? UILabel)?.text, "moved", "the node itself must have moved")
     }
 
+    func testHangsALayerFromTheSurfaceRatherThanFromWhereItWasWritten() throws {
+        try renderer.apply([
+            ["op": "create", "id": 1, "type": "view", "props": [:]],
+            ["op": "insert", "id": 1, "parent": 0, "index": 1],
+            ["op": "create", "id": 2, "type": "view", "props": [:]],
+            ["op": "insert", "id": 2, "parent": 1, "index": 1],
+            ["op": "create", "id": 3, "type": "layer", "props": [:]],
+            ["op": "insert", "id": 3, "parent": 2, "index": 1],
+            ["op": "create", "id": 4, "type": "text", "props": ["text": "over it"]],
+            ["op": "insert", "id": 4, "parent": 3, "index": 1],
+        ])
+
+        let roots = tree()
+
+        XCTAssertEqual(roots.count, 2, "a layer stands beside the application")
+        XCTAssertEqual(tree(tree(roots[0])[0]).count, 0, "nothing of it is left where it was written")
+        XCTAssertEqual((tree(roots[1])[0] as? UILabel)?.text, "over it", "and what it holds came with it")
+    }
+
     func testRefusesABatchThatBreaksTheContract() {
         XCTAssertThrowsError(try renderer.apply([["op": "update", "id": 1]]),
                              "an update with no props must be refused")
@@ -182,10 +201,12 @@ final class ConformanceTests: XCTestCase {
         XCTAssertGreaterThan(spaced["width"] ?? 0, plain["width"] ?? 0,
                              "space asked for between letters is space the line needs")
 
+        // A line is a multiple of the size, and it means that on every platform: asked as a multiple of
+        // the face's own line instead, the same tree is a different height on each.
         let tall = renderer.measureText("spacing", style: ["fontSize": 16, "lineHeight": 3], bound: nil)
 
-        XCTAssertGreaterThan(tall["height"] ?? 0, plain["height"] ?? 0,
-                             "and space asked for between lines is space the paragraph needs")
+        XCTAssertEqual(tall["height"] ?? 0, 48, accuracy: 1,
+                       "a line is a multiple of the size, so one string at three of them is 48")
     }
 
     func testReportsAnEventAsWhatTheEventCarries() throws {
@@ -263,11 +284,24 @@ final class ConformanceTests: XCTestCase {
                        "the caret must not have moved")
     }
 
+    func testPaintsItsOwnGroundFromTheTheme() {
+        renderer.showTheme([
+            "appearance": "dark", "background": "#101014ff", "text": "#e7e2eaff",
+            "primary": "#8c9effff", "family": "Roboto",
+        ])
+
+        XCTAssertEqual(surface.backgroundColor, VarnStyle.color("#101014ff"),
+                       "the ground it was given is what the window is painted in")
+        XCTAssertEqual(surface.overrideUserInterfaceStyle, .dark,
+                       "and the scheme the platform resolves its own colours against")
+    }
+
     func testDeclaresWhatItCanDo() {
         let known = [
             "text", "image", "list", "scroll", "input", "video", "webview", "canvas",
             "picker", "datepicker", "haptics", "safearea", "fontBytes", "imageBytes",
-            "audio", "map", "location", "gradient", "blur",
+            "audio", "map", "location", "gradient", "nineSlice", "blur", "camera", "microphone",
+            "systemBars",
         ]
 
         for name in renderer.capabilities.keys {
@@ -276,4 +310,25 @@ final class ConformanceTests: XCTestCase {
 
         XCTAssertTrue(renderer.capabilities["text"] == true, "a renderer that draws text must say so")
     }
+    /// A string that says where its own lines end is measured as tall as it says.
+    ///
+    /// Every platform's text engine reads a line break, and the browser is the one that collapses it, so
+    /// this is what the other two are held to: three lines are three lines, however much room there is.
+    func testAStringCarriesTheLinesItWasWrittenWith() {
+        let style: [String: Any] = ["fontSize": CGFloat(16)]
+
+        let one = renderer.measureText("one", style: style, bound: nil)
+        let three = renderer.measureText("one\ntwo\nthree", style: style, bound: nil)
+
+        let single = try! XCTUnwrap(one["height"])
+        let written = try! XCTUnwrap(three["height"])
+
+        // A line inside a block is not quite a line on its own — the leading around a single one is not
+        // repeated — so three lines are about three times one rather than exactly.
+        XCTAssertGreaterThan(written, single * 2.5, "a label of three lines is about three lines tall")
+        XCTAssertLessThan(written, single * 3.5, "and no taller than that")
+        XCTAssertLessThan(try! XCTUnwrap(three["width"]), single * 6,
+                          "and no wider than its longest line, rather than all of them run together")
+    }
+
 }

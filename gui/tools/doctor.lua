@@ -184,7 +184,7 @@ function M.check(path, cacheRoot)
 end
 
 --- Runs the check from the command line, reporting what it found and failing when something is wrong.
-function M.main(arguments)
+local function main(arguments)
     local path = arguments[1]
 
     if path == nil then
@@ -213,7 +213,7 @@ end
 
 if arg ~= nil and arg[0] ~= nil and arg[0]:find("doctor.lua", 1, true) then
     -- Reading a project is io, so the check runs on a coroutine the loop drives and exits from there.
-    async.run(function() os.exit(M.main(arg)) end)
+    async.run(function() os.exit(main(arg)) end)
 end
 
 return M

@@ -1,4 +1,6 @@
 local gui = require("gui")
+local async = require("async")
+local waitFor = require("gui.tests.waiting")
 
 local function start(description)
     local renderer = gui.headless()
@@ -240,4 +242,194 @@ do
     assert(ground.frame.height == 844, "and the ground is what covers the screen")
 end
 
-print("gui.presentation ok")
+-- What a portal holds is laid out against the surface rather than against the box it was written in.
+--
+-- An overlay written inside a screen would otherwise cover that screen and nothing else: a drawer raised
+-- from a screen inside a stack opened under the bar above it, and an alert raised from a panel was
+-- trapped in the panel.
+do
+    local _, renderer = start(gui.View { style = { grow = 1, padding = 40 },
+        gui.View { style = { height = 100, overflow = "hidden" },
+            gui.Portal {
+                gui.View { style = { position = "absolute", top = 0, right = 0, bottom = 0, left = 0 },
+                    gui.Text { text = "over everything" },
+                },
+            },
+        },
+    })
+
+    local found = renderer:findAll("layer")
+
+    assert(#found == 1, "a portal draws one layer, drew " .. #found)
+
+    local layer = found[1]
+
+    assert(layer.frame.x == 0 and layer.frame.y == 0,
+        "a layer stands at the corner of the surface, stands at " .. layer.frame.x .. "," .. layer.frame.y)
+    assert(layer.frame.width == 390 and layer.frame.height == 844,
+        "and it is the whole of it, is " .. layer.frame.width .. "x" .. layer.frame.height)
+    assert(shown(renderer):find("over everything", 1, true) ~= nil, "and what it holds is on screen")
+end
+
+-- A portal is where it was written for everything but where it is drawn, so what it holds reads the
+-- state of the component that raised it and goes when that component does.
+do
+    local Screen = gui.component({
+        name = "PortalScreen",
+        state = { count = 0, gone = false },
+
+        render = function(self)
+            return gui.View { style = { grow = 1 },
+                gui.Pressable {
+                    accessibilityLabel = "Add",
+                    onPress = function() self:setState({ count = self.state.count + 1 }) end,
+                    gui.Text { text = "add" },
+                },
+
+                gui.Pressable {
+                    accessibilityLabel = "Leave",
+                    onPress = function() self:setState({ gone = true }) end,
+                    gui.Text { text = "leave" },
+                },
+
+                not self.state.gone and gui.Portal {
+                    gui.Text { text = "counted " .. self.state.count },
+                } or false,
+            }
+        end,
+    })
+
+    local runtime, renderer = start(Screen {})
+
+    assert(shown(renderer):find("counted 0", 1, true) ~= nil, "a portal draws what the tree gave it")
+
+    pressable(renderer, "Add").props.onPress()
+    runtime:commit()
+
+    assert(shown(renderer):find("counted 1", 1, true) ~= nil,
+        "and it follows the state it was written under, shows " .. shown(renderer))
+
+    pressable(renderer, "Leave").props.onPress()
+    runtime:commit()
+
+    assert(#renderer:findAll("layer") == 0, "a portal goes when what raised it goes")
+end
+
+async.run(function()
+    -- A screen that goes while what it raised is still leaving takes the layer with it.
+    --
+    -- The exit is held open for the length of the move, so a screen dismissed and then left in the same
+    -- tick has an overlay outliving the tree that raised it. It would stay over the application for good,
+    -- since nothing below is holding it any more and nothing above knows it is there.
+    do
+        local Leaving = gui.component({
+            name = "Leaving",
+            state = { open = true, gone = false },
+
+            render = function(self)
+                if self.state.gone then
+                    return gui.View { style = { grow = 1 } }
+                end
+
+                return gui.View { style = { grow = 1 },
+                    gui.Sheet {
+                        visible = self.state.open,
+                        onDismiss = function() end,
+                        gui.Text { text = "inside" },
+                    },
+                }
+            end,
+        })
+
+        local runtime, renderer = start(Leaving {})
+
+        assert(#renderer:findAll("layer") == 1, "the sheet is drawn through a layer")
+
+        runtime.root.instance:setState({ open = false })
+        runtime:commit()
+        runtime.root.instance:setState({ gone = true })
+        runtime:commit()
+
+        -- The layer goes when the travel out ends, which is waited for rather than slept through.
+        waitFor(function()
+            runtime:commit()
+            return #renderer:findAll("layer") == 0
+        end)
+
+        local left = #renderer:findAll("layer")
+        assert(left == 0, "nothing is left over the application, " .. left .. " left")
+    end
+
+    -- Everything shown over a screen reports both ends of both moves, the way a platform tells a screen.
+    --
+    -- Told only that something was dismissed, a caller has to guess when it actually went: a video paused
+    -- while a sheet is still travelling is paused on screen, and one freed too late holds a decoder open
+    -- over a screen nobody is looking at. Each of the four is a moment, and each has its other half.
+    do
+        local async = require("async")
+
+            -- Each is written the way it is written, since a modal takes children and a toast a message.
+        local shown = {
+            { gui.Modal, { gui.Text { text = "inside" } } },
+            { gui.Sheet, { gui.Text { text = "inside" } } },
+            { gui.Menu, { items = { { key = "one", label = "One" } } } },
+            { gui.Toast, { message = "said" } },
+            { gui.Alert, { title = "asked", actions = { { key = "ok", label = "OK" } } } },
+            { gui.ActionSheet, { title = "asked", cancelLabel = "No",
+                actions = { { key = "ok", label = "OK" } } } },
+        }
+
+        for index = 1, #shown do
+            local told = {}
+
+            local Screen = gui.component({
+                name = "MomentScreen" .. index,
+                state = { open = true },
+
+                render = function(self)
+                    local spec = {
+                        visible = self.state.open,
+                        onDismiss = function() end,
+                        onWillShow = function() told[#told + 1] = "onWillShow" end,
+                        onShow = function() told[#told + 1] = "onShow" end,
+                        onWillHide = function() told[#told + 1] = "onWillHide" end,
+                        onHide = function() told[#told + 1] = "onHide" end,
+                    }
+
+                    for key, value in pairs(shown[index][2]) do
+                        spec[key] = value
+                    end
+
+                    return gui.View { style = { grow = 1 }, shown[index][1](spec) }
+                end,
+            })
+
+            local runtime = start(Screen {})
+
+            assert(told[1] == "onWillShow",
+                "it says it is about to arrive, " .. tostring(shown[index][3] or index)
+                    .. " said " .. tostring(told[1]))
+
+            waitFor(function()
+                runtime:commit()
+                return told[2] ~= nil
+            end)
+
+            assert(told[2] == "onShow", "and says it has, said " .. tostring(told[2]))
+
+            runtime.root.instance:setState({ open = false })
+            runtime:commit()
+
+            assert(told[3] == "onWillHide", "it says it is about to go, said " .. tostring(told[3]))
+
+            waitFor(function()
+                runtime:commit()
+                return told[4] ~= nil
+            end)
+
+            assert(told[4] == "onHide", "and says it has gone, said " .. tostring(told[4]))
+        end
+    end
+
+    print("gui.presentation ok")
+end)

@@ -11,6 +11,7 @@ import android.view.View
 import android.view.ViewOutlineProvider
 import android.widget.TextView
 import org.json.JSONObject
+import kotlin.math.abs
 
 /**
  * Turns the resolved style a commit carries into the Android properties that draw it.
@@ -19,7 +20,7 @@ import org.json.JSONObject
  * already resolved against the theme, so this file only assigns.
  */
 object VarnStyle {
-    private val families = mutableMapOf<String, Typeface>()
+    private val families = mutableMapOf<String, MutableMap<Int, Typeface>>()
 
     fun color(value: Any?): Int? {
         val text = value as? String ?: return null
@@ -39,19 +40,34 @@ object VarnStyle {
         return Color.argb(alpha, (rgb shr 16) and 0xff, (rgb shr 8) and 0xff, rgb and 0xff)
     }
 
-    fun registerFont(family: String, path: String) {
-        families[family] = Typeface.createFromFile(path)
+    fun registerFont(family: String, weight: Int, path: String) {
+        families.getOrPut(family) { mutableMapOf() }[weight] = Typeface.createFromFile(path)
     }
 
     fun typeface(style: JSONObject): Typeface {
-        val family = style.optString("fontFamily", "")
-        val base = families[family] ?: Typeface.DEFAULT
-        val italic = style.optString("fontStyle", "") == "italic"
-
         val weight = style.optString("fontWeight", "400").toIntOrNull() ?: 400
+        val italic = style.optString("fontStyle", "") == "italic"
+        val faces = families[style.optString("fontFamily", "")]
+
+        if (faces == null) {
+            return system(weight, italic)
+        }
+
+        // A family is drawn in the face it ships nearest the weight asked for, and the face is then given
+        // its own weight rather than the one asked for, since the system would thicken a bold again.
+        val chosen = faces.minByOrNull { abs(it.key - weight) } ?: return system(weight, italic)
 
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-            return Typeface.create(base, weight, italic)
+            return Typeface.create(chosen.value, chosen.key, italic)
+        }
+
+        return Typeface.create(chosen.value, if (italic) Typeface.ITALIC else Typeface.NORMAL)
+    }
+
+    /** The system font carries every weight, so it is asked for the one wanted rather than for a face. */
+    private fun system(weight: Int, italic: Boolean): Typeface {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            return Typeface.create(Typeface.DEFAULT, weight, italic)
         }
 
         val slant = when {
@@ -61,7 +77,7 @@ object VarnStyle {
             else -> Typeface.NORMAL
         }
 
-        return Typeface.create(base, slant)
+        return Typeface.create(Typeface.DEFAULT, slant)
     }
 
     /**
@@ -197,9 +213,16 @@ object VarnStyle {
         label.paintFlags = decoration(style, label.paintFlags)
         color(style.opt("color"))?.let { label.setTextColor(it) }
 
-        // A line height is a multiple of the size, which is what the other two read it as.
+        // A line is a multiple of the size, which is what the other two read it as. A multiplier here
+        // multiplies the font's own spacing instead, which is a different number on every face, so the
+        // line asked for is set as the difference from what the paint would have drawn.
         val leading = style.optDouble("lineHeight", 0.0)
-        label.setLineSpacing(0f, if (leading > 0.0) leading.toFloat() else 1f)
+
+        if (leading > 0.0) {
+            label.setLineSpacing((label.textSize * leading.toFloat()) - label.paint.fontSpacing, 1f)
+        } else {
+            label.setLineSpacing(0f, 1f)
+        }
 
         when (style.optString("textAlign", "")) {
             "center" -> label.textAlignment = View.TEXT_ALIGNMENT_CENTER

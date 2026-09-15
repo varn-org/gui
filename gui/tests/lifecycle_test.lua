@@ -1,4 +1,5 @@
 local gui = require("gui")
+local waitFor = require("gui.tests.waiting")
 
 local function start(description)
     local renderer = gui.headless()
@@ -240,4 +241,72 @@ do
     runtime:stop()
 end
 
-print("gui.lifecycle ok")
+-- A component asks what shows it whether or not it is told about it.
+do
+    local asked = {}
+    local Asking = gui.component({
+        name = "Asking",
+        onMount = function(self) asked[#asked + 1] = self:visible() end,
+        render = function() return gui.Text { text = "asking" } end,
+    })
+
+    start(gui.View { style = { grow = 1 },
+        gui.Showing { value = false, Asking {} },
+    })
+
+    assert(asked[1] == false,
+        "a component with no visibility callback still hears the truth, got " .. tostring(asked[1]))
+end
+
+-- A pulse runs while the screen is shown and waits while it is not.
+--
+-- A tab bar keeps every tab, so a pulse tied to being mounted alone runs for the life of the
+-- application on a screen nobody can see, asking for a commit at every turn.
+do
+    local async = require("async")
+
+    async.run(function()
+        local turns = 0
+
+        local Pulse = gui.component({
+            name = "Pulse",
+            onMount = function(self) self:every(5, function() turns = turns + 1 end) end,
+            render = function() return gui.Text { text = "pulse" } end,
+        })
+
+        local Tabs = gui.component({
+            name = "PulseTabs",
+            state = { tab = 2 },
+            render = function(self)
+                return gui.View { style = { grow = 1 },
+                    gui.Showing { value = self.state.tab == 1, Pulse {} },
+                }
+            end,
+        })
+
+        local runtime = select(1, start(Tabs {}))
+
+        async.sleep(60):await()
+
+        assert(turns == 0, "a pulse on a tab nobody is looking at waits, took " .. turns .. " turns")
+
+        runtime.root.instance:setState({ tab = 1 })
+
+        for _ = 1, 4 do
+            runtime:commit()
+        end
+
+        waitFor(function() return turns >= 3 end)
+
+        assert(turns >= 3, "and it goes on turning on coming back to the tab, took " .. turns .. " turns")
+
+        runtime:stop()
+
+        local taken = turns
+        async.sleep(40):await()
+
+        assert(turns == taken, "a screen that has been taken down stops pulsing, took " .. (turns - taken))
+
+        print("gui.lifecycle ok")
+    end)
+end

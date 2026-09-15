@@ -83,12 +83,18 @@ local Page = gui.component({
 
     render = function(self)
         local surface = gui.environment:read(self)
+        local margin = chrome.margin(surface.breakpoint)
 
         return gui.ScrollView {
             style = { grow = 1 },
             contentStyle = {
                 gap = "lg",
-                padding = chrome.margin(surface.breakpoint),
+                padding = margin,
+
+                -- A page ends above whatever the system draws over the bottom of the glass rather than
+                -- under it, and what is left of that inset is nothing at all when something above the
+                -- page has already kept clear of it.
+                paddingBottom = margin + surface.insets.bottom,
                 maxWidth = chrome.readable,
                 width = "100%",
                 alignSelf = "center",

@@ -1,4 +1,5 @@
 local gui = require("gui")
+local waitFor = require("gui.tests.waiting")
 
 -- The sample is loaded the way a host loads it, with its own root on the path.
 package.path = "sample/?.lua;sample/?/init.lua;" .. package.path
@@ -277,12 +278,12 @@ end
 
 -- Nothing on a demo is invisible for want of a size, which is what a component with no size would be.
 do
-    -- A box may be empty, and a sound and a fix are never seen at all, since what a reader sees of
-    -- either is drawn by the tree that asked for it.
+    -- A box may be empty, and a sound, a fix and a microphone are never seen at all, since what a reader
+    -- sees of any of them is drawn by the tree that asked for it.
     local ALLOWED = {
         spacer = true, view = true, scroll = true, safearea = true, keyboardavoiding = true,
         list = true, sectionlist = true, grid = true, carousel = true, pressable = true,
-        audio = true, location = true,
+        audio = true, location = true, recorder = true,
     }
 
     for index = 1, #catalogue.groups do
@@ -437,16 +438,17 @@ do
             bytes = crypto.base64Encode(original) })
         picker.props.onPick({ name = "huge.mov", size = 900000000, type = "video/quicktime" })
 
-        -- What the demo does with it is asked for later, so the loop is given a turn to do it in.
-        async.sleep(20):await()
-
-        for _ = 1, 4 do
-            if not runtime:needsCommit() then
-                break
+        -- What the demo does with it is asked for later, so the loop is given turns until it has.
+        --
+        -- Twenty milliseconds is plenty on an idle laptop and not enough while the same machine is
+        -- building an application for a phone, which is a gate that fails where nothing is wrong.
+        waitFor(function()
+            while runtime:needsCommit() do
+                runtime:commit()
             end
 
-            runtime:commit()
-        end
+            return #renderer:findAll("image") == 1
+        end)
 
         local pictures = renderer:findAll("image")
 
@@ -519,7 +521,63 @@ do
         end
 
         assert(#undrawn == 0, "the gallery draws no " .. table.concat(undrawn, ", "))
-        assert(#components == 61, "the library exposes " .. #components .. " components")
+        assert(#components == 86, "the library exposes " .. #components .. " components")
+
+        -- Every device a screen reaches for is declared where the platform demands it.
+        --
+        -- iOS does not refuse an undeclared one, it kills the process: pressing keep on a picture ended
+        -- the application outright, since asking the photo library for permission without the sentence
+        -- saying why is a termination rather than a refusal. What a screen uses is read out of the
+        -- gallery's own source, so a demo that reaches for something new fails here rather than there.
+        local WANTED = {
+            { uses = "gui%.Camera", key = "NSCameraUsageDescription" },
+            { uses = "gui%.Recorder", key = "NSMicrophoneUsageDescription" },
+            { uses = "gui%.files", key = "NSPhotoLibraryAddUsageDescription" },
+            { uses = "gui%.Map", key = "NSLocationWhenInUseUsageDescription" },
+        }
+
+        local plist = fs.readFile("apps/ios/Info.plist"):await()
+
+        for index = 1, #WANTED do
+            local wanted = WANTED[index]
+
+            if text:find(wanted.uses) ~= nil then
+                assert(plist:find("<key>" .. wanted.key .. "</key>", 1, true) ~= nil,
+                    "a screen reaches for what " .. wanted.key .. " covers and Info.plist never declares it")
+            end
+        end
+
+        -- The demos are built after the shape of applications a reader already knows, and none of them
+        -- names one.
+        --
+        -- Copying a shape is what a demo is for and naming whose shape it is belongs to nobody here, so
+        -- the names are held out of the source, the comments and the documentation alike. A word that is
+        -- also ordinary English is not on the list: a show in the listening application is called Signal
+        -- and Noise and the browser host aborts a listener with one, neither of which is a messenger.
+        local NAMED = {
+            "whatsapp", "telegram", "messenger", "imessage", "gmail", "outlook", "superhuman",
+            "spotify", "audible", "netflix", "youtube", "instagram", "tiktok", "twitter", "airbnb",
+            "ifood", "rappi", "deliveroo", "doordash", "uber", "lyft", "cabify", "99app",
+            "mercado livre", "mercadolivre", "mercadolibre", "amazon", "shopee", "aliexpress",
+            "ubook", "storytel", "kindle",
+        }
+
+        local prose = { text }
+
+        for _, page in ipairs(fs.readdir("docs"):await()) do
+            if page:find("%.md$") ~= nil then
+                prose[#prose + 1] = fs.readFile("docs/" .. page):await()
+            end
+        end
+
+        local written = table.concat(prose, "\n"):lower()
+
+        -- A name is matched as a whole word rather than as a run of letters, since several of these sit
+        -- inside ordinary English: `wrapping` carries one of them and is a paragraph about text.
+        for index = 1, #NAMED do
+            assert(written:find("%f[%w]" .. NAMED[index] .. "%f[%W]") == nil,
+                "the demos name " .. NAMED[index] .. ", and whose shape one copies belongs to nobody here")
+        end
 
         print("gui.sample ok")
     end)

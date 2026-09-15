@@ -5,6 +5,7 @@ import android.graphics.Rect
 import android.net.Uri
 import android.view.Choreographer
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -30,6 +31,7 @@ class VarnGUIHost(
     private val density = surface.context.resources.displayMetrics.density
 
     private var running = false
+    private var started = false
     private var keyboard = 0
     private var reportedWidth = 0
     private var reportedHeight = 0
@@ -58,6 +60,41 @@ class VarnGUIHost(
         get() = renderer.onPermission
         set(value) { renderer.onPermission = value }
 
+    /**
+     * Keeps a file where the system keeps pictures and films, or hands it to whatever sends one.
+     *
+     * What a camera captures is written where the application may write, which nothing outside it can
+     * reach: a reader who took a picture has nothing until it is in the store the gallery reads. Sharing
+     * goes through the same store, since an address anything else may open is what a chooser needs.
+     */
+    private fun keep(request: JSONObject) {
+        val ticket = request.optInt("ticket")
+        val file = java.io.File(request.optString("path"))
+
+        fun answer(reply: JSONObject) {
+            runtime.emit("gui.files", reply.put("ticket", ticket).toString())
+        }
+
+        if (!file.exists()) {
+            answer(JSONObject().put("problem", "there is no file at ${file.path}"))
+            return
+        }
+
+        runCatching {
+            val kept = VarnLibrary.keep(surface.context, file)
+
+            if (request.optString("action") == "share") {
+                val given = request.optString("title")
+                val chooser = VarnLibrary.share(surface.context, kept, file, given.ifEmpty { null })
+                surface.context.startActivity(chooser)
+            }
+
+            answer(JSONObject().put("path", kept.toString()))
+        }.onFailure { problem ->
+            answer(JSONObject().put("problem", problem.message ?: "the file could not be kept"))
+        }
+    }
+
     /** Hands a host's activity result to the picker that asked for it. */
     fun chose(picker: VarnFilePicker, uris: List<Uri>) {
         picker.chosen(uris)
@@ -81,7 +118,26 @@ class VarnGUIHost(
      * The framework is Lua the application carries, so the engine is told where it was unpacked and
      * requires it from there.
      */
-    fun start(archive: String, framework: String, cache: String) {
+    /**
+     * Takes a link while the application is running, which is what a deep link and an app link arrive as.
+     *
+     * Where the application was asked to be is what a router opens on, so one that arrives before the
+     * engine has started is held rather than dropped, and one that arrives after is reported.
+     */
+    fun open(address: String) {
+        renderer.address = address
+
+        if (!started) {
+            return
+        }
+
+        runtime.emit("gui.address", JSONObject().put("address", address).toString())
+    }
+
+    fun start(archive: String, framework: String, cache: String, address: String = "/") {
+        renderer.address = address
+        started = true
+
         register()
         observeInsets()
 
@@ -89,6 +145,7 @@ class VarnGUIHost(
             package.path = "$framework/?.lua;$framework/?/init.lua;" .. package.path
             require("gui.host.launch").start({
                 path = "$archive",
+                framework = "$framework",
                 cache = "$cache",
                 onProblem = function(problem) host.gui_problem({ problem = problem }) end,
             })
@@ -120,12 +177,41 @@ class VarnGUIHost(
      * Stopping the pump alone leaves every screen mounted: a timer a screen asked for goes on firing and
      * everything a node opened is still open, on an interface nobody is looking at.
      */
+    /**
+     * Tells the engine where the application is, which an activity knows and a view does not.
+     *
+     * An activity that is paused goes on running, unlike an application a phone has suspended and unlike
+     * a tab a browser has hidden, so the same tree would otherwise behave three ways. It is handed over
+     * and pumped in the same breath, since the frames stop coming once the window is gone and a moment
+     * queued for a pump that is not coming is a screen never told it went away.
+     */
+    fun report(state: String) {
+        if (!running || renderer.state == state) {
+            return
+        }
+
+        renderer.state = state
+        runtime.emit("gui.lifecycle", JSONObject().put("state", state).toString())
+        runtime.poll()
+    }
+
+    /** Asks the engine for back what it can work out again, which is what the platform is asking for. */
+    fun trimMemory() {
+        if (!running) {
+            return
+        }
+
+        runtime.emit("gui.memory", "{}")
+        runtime.poll()
+    }
+
     fun stop() {
         runtime.emit("gui.stop", "{}")
         runtime.poll()
 
         running = false
         choreographer.removeFrameCallback(frame)
+        surface.viewTreeObserver.removeOnGlobalLayoutListener(insets)
     }
 
     /**
@@ -160,8 +246,7 @@ class VarnGUIHost(
         }
 
         answering("gui_measure_control", "{\"width\":0,\"height\":0}") { json ->
-            val request = JSONObject(json)
-            renderer.measureControl(request.getString("type"), request.optString("variant", null)).toString()
+            renderer.measureControl(JSONObject(json).getString("type")).toString()
         }
 
         answering("gui_invoke", "false") { json ->
@@ -176,13 +261,59 @@ class VarnGUIHost(
             "null"
         }
 
+        answering("gui_files", "null") { json ->
+            keep(JSONObject(json))
+            "null"
+        }
+
+        // A value crosses as json so it comes back as what it was rather than as the text of what it was.
+        answering("gui_preferences", "null") { json ->
+            val request = JSONObject(json)
+            val ticket = request.optInt("ticket")
+            val name = request.optString("name")
+            val reply = JSONObject().put("ticket", ticket)
+
+            try {
+                when (request.optString("action")) {
+                    "set" -> VarnPreferences.set(surface.context, name, request.opt("value").let { held ->
+                        JSONArray().put(held).toString()
+                    })
+
+                    "get" -> {
+                        val held = VarnPreferences.get(surface.context, name)
+
+                        if (held != null) {
+                            reply.put("value", JSONArray(held).opt(0))
+                        }
+                    }
+
+                    "remove" -> VarnPreferences.remove(surface.context, name)
+                    "clear" -> VarnPreferences.clear(surface.context)
+                    "names" -> reply.put("value", JSONArray(VarnPreferences.names(surface.context)))
+                    else -> reply.put("problem", "a preference is set, read, removed, cleared or listed")
+                }
+            } catch (problem: Throwable) {
+                reply.put("problem", problem.message ?: "the keystore refused it")
+            }
+
+            runtime.emit("gui.preferences", reply.toString())
+            "null"
+        }
+
+        answering("gui_theme", "null") { json ->
+            renderer.showTheme(JSONObject(json))
+            "null"
+        }
+
         answering("gui_capabilities", "{}") { JSONObject(renderer.capabilities.toMap()).toString() }
 
         answering("gui_surface", "{}") { renderer.surfaceDescription().toString() }
 
         answering("gui_register_font", "null") { json ->
             val request = JSONObject(json)
-            renderer.registerFont(request.getString("family"), request.getString("path"))
+            val weight = request.optString("weight", "400").toIntOrNull() ?: 400
+
+            renderer.registerFont(request.getString("family"), weight, request.getString("path"))
             runtime.emit("gui.fontsRegistered", "{}")
             "null"
         }
@@ -195,17 +326,19 @@ class VarnGUIHost(
      * keyboard without ever asking what platform it is running on.
      */
     private fun observeInsets() {
-        surface.viewTreeObserver.addOnGlobalLayoutListener {
-            val visible = Rect()
-            surface.getWindowVisibleDisplayFrame(visible)
+        surface.viewTreeObserver.addOnGlobalLayoutListener(insets)
+    }
 
-            val covered = maxOf(0, surface.rootView.height - visible.bottom)
-            val height = (covered / density).toInt()
+    private val insets = ViewTreeObserver.OnGlobalLayoutListener {
+        val visible = Rect()
+        surface.getWindowVisibleDisplayFrame(visible)
 
-            if (height != keyboard) {
-                keyboard = height
-                runtime.emit("gui.keyboard", JSONObject().put("height", height).toString())
-            }
+        val covered = maxOf(0, surface.rootView.height - visible.bottom)
+        val height = (covered / density).toInt()
+
+        if (height != keyboard) {
+            keyboard = height
+            runtime.emit("gui.keyboard", JSONObject().put("height", height).toString())
         }
     }
 

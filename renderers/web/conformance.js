@@ -60,7 +60,7 @@ function refuses(run, message) {
 export const CAPABILITIES = [
     "text", "image", "list", "scroll", "input", "video", "webview", "canvas",
     "picker", "datepicker", "haptics", "safearea", "fontBytes", "imageBytes",
-    "audio", "map", "location", "gradient", "blur",
+    "audio", "map", "location", "gradient", "blur", "camera", "microphone",
 ];
 
 export const CASES = [
@@ -198,6 +198,28 @@ export const CASES = [
         },
     },
     {
+        name: "hangs a layer from the surface rather than from where it was written",
+        run(renderer) {
+            renderer.apply([
+                { op: "create", id: 1, type: "view", props: {} },
+                { op: "insert", id: 1, parent: 0, index: 1 },
+                { op: "create", id: 2, type: "view", props: {} },
+                { op: "insert", id: 2, parent: 1, index: 1 },
+                { op: "create", id: 3, type: "layer", props: {} },
+                { op: "insert", id: 3, parent: 2, index: 1 },
+                { op: "create", id: 4, type: "text", props: { text: "over it" } },
+                { op: "insert", id: 4, parent: 3, index: 1 },
+            ]);
+
+            const roots = tree(renderer);
+
+            assert(roots.length === 2, `a layer stands beside the application, found ${roots.length} roots`);
+            assert(roots[1].type === "layer", "and over it rather than under it");
+            assert(roots[0].children[0].children.length === 0, "nothing of it is left where it was written");
+            assert(roots[1].children[0].props.text === "over it", "and what it holds came with it");
+        },
+    },
+    {
         name: "refuses a batch that breaks the contract",
         run(renderer) {
             refuses(() => renderer.apply([{ op: "update", id: 1 }]), "an update with no props must be refused");
@@ -234,10 +256,24 @@ export const CASES = [
             assert(spaced.width > plain.width,
                 `space asked for between letters is space the line needs, got ${spaced.width} against ${plain.width}`);
 
+            // A line is a multiple of the size, and it means that on every platform: asked as a multiple
+            // of the face's own line instead, the same tree is a different height on each.
             const tall = renderer.measureText("spacing", { fontSize: 16, lineHeight: 3 }, 0);
 
-            assert(tall.height > plain.height,
-                `and space asked for between lines is space the paragraph needs, got ${tall.height} against ${plain.height}`);
+            assert(Math.abs(tall.height - 48) <= 1,
+                `a line is a multiple of the size, so one string at three of them is 48, got ${tall.height}`);
+        },
+    },
+    {
+        name: "a string carries the lines it was written with",
+        run(renderer) {
+            const one = renderer.measureText("one", { fontSize: 16 }, 0);
+            const three = renderer.measureText("one\ntwo\nthree", { fontSize: 16 }, 0);
+
+            // A line inside a block is not quite a line on its own, since the leading around a single
+            // one is not repeated, so three lines are about three times one rather than exactly.
+            assert(three.height > one.height * 2.5 && three.height < one.height * 3.5,
+                `a label of three lines is about three lines tall, got ${three.height} against ${one.height}`);
         },
     },
     {
@@ -313,6 +349,21 @@ export const CASES = [
 
             assert(element.value === "Ada", "the field must hold the value it was given");
             assert(element.selectionStart === 1, `the caret moved to ${element.selectionStart}`);
+        },
+    },
+    {
+        name: "paints its own ground from the theme",
+        run(renderer) {
+            renderer.showTheme({
+                appearance: "dark", background: "#101014ff", text: "#e7e2eaff",
+                primary: "#8c9effff", family: "Roboto",
+            });
+
+            const root = document.documentElement.style;
+
+            assert(root.getPropertyValue("--varn-ground") === "#101014ff",
+                "the ground it was given is what the page is painted in");
+            assert(root.colorScheme === "dark", "and the scheme the browser resolves its own colours against");
         },
     },
     {

@@ -31,5 +31,4 @@ function M.isRef(value)
     return getmetatable(value) == Ref
 end
 
-
 return M

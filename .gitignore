@@ -21,14 +21,10 @@
 /renderers/web/node_modules/
 /apps/web/dist/
 
-# what run.py assembles for the page: the engine, the framework and the packed gallery
+# the wasm engine run.py fetches for the page, which is assembled from it into apps/web/dist
 /apps/web/varn_wasm.*
-/apps/web/framework.zip
-/apps/web/gallery.vap
 
 # platform noise
 .DS_Store
 *.swp
-
-# what the android sample host needs locally
-/apps/android/local.properties
+/__pycache__/

@@ -67,14 +67,22 @@ function Renderer:detach(id)
 end
 
 function Renderer:place(op)
-    self:expect(op.id)
+    local node = self:expect(op.id)
     self:detach(op.id)
+
+    -- A layer hangs from the surface whatever parent its insert names, since it is drawn over the whole
+    -- application rather than inside the box it was written in.
+    if node.type == "layer" then
+        self.roots[#self.roots + 1] = op.id
+        node.parent = 0
+        return
+    end
 
     local siblings = op.parent == 0 and self.roots or self:expect(op.parent).children
     local index = math.min(op.index, #siblings + 1)
 
     table.insert(siblings, index, op.id)
-    self.nodes[op.id].parent = op.parent
+    node.parent = op.parent
 end
 
 --- Answers the tree as nested tables, which is what an assertion reads.
@@ -140,6 +148,11 @@ function Renderer:raise(id, name, payload)
     self.events[#self.events + 1] = { id = id, name = name, payload = payload }
 end
 
+--- Records the ground the platform is asked to paint, which is what a look reaches a renderer as.
+function Renderer:showTheme(ground)
+    self.ground = ground
+end
+
 --- Records an imperative call, which is what a ref reaches a node through.
 function Renderer:invoke(id, method, arguments)
     self:expect(id)
@@ -148,26 +161,26 @@ function Renderer:invoke(id, method, arguments)
 end
 
 --- The size this renderer draws each control at, which is what a test predicts against.
+--- What each platform answers when it is asked how large it draws a control with nothing in it.
+---
+--- A slider and a segmented control each answer a width of their own — a browser says 129 and 0, UIKit
+--- says about 150 — and neither of those is what either control is drawn at, since both run the width of
+--- the row they sit in. Answering nothing here would be a stand-in agreeing with the rule rather than
+--- modelling a platform, and the rule is the declaration's to keep.
 local CONTROLS = {
     switch = { width = 51, height = 31 },
-    slider = { width = 0, height = 32 },
+    slider = { width = 129, height = 32 },
     stepper = { width = 94, height = 32 },
-    segmented = { width = 0, height = 32 },
+    segmented = { width = 88, height = 32 },
     progress = { width = 0, height = 4 },
     activity = { width = 24, height = 24 },
     datepicker = { width = 118, height = 44 },
     timepicker = { width = 86, height = 44 },
     colorpicker = { width = 44, height = 32 },
-    ["datepicker/wheel"] = { width = 320, height = 216 },
-    ["timepicker/wheel"] = { width = 320, height = 216 },
 }
 
 --- Answers the size a control is drawn at, which is the one thing about it Lua cannot work out.
-function Renderer:measureControl(kind, variant)
-    if variant ~= nil then
-        return CONTROLS[kind .. "/" .. variant] or { width = 0, height = 0 }
-    end
-
+function Renderer:measureControl(kind)
     return CONTROLS[kind] or { width = 0, height = 0 }
 end
 
@@ -178,14 +191,32 @@ end
 function Renderer:measureText(text, style, bound)
     local size = style.fontSize or 15
     local line = size * (style.lineHeight or 1.35)
-    local width = #text * (size * 0.5 + (style.letterSpacing or 0))
+    local each = size * 0.5 + (style.letterSpacing or 0)
+
+    -- A string says where its own lines end, which every platform's text engine reads and this stands
+    -- in for: a paragraph of three lines is three lines however much room it is given.
+    local written = 1
+    local longest = 0
+    local run = 0
+
+    for index = 1, #text do
+        if text:sub(index, index) == "\n" then
+            written = written + 1
+            longest = math.max(longest, run)
+            run = 0
+        else
+            run = run + 1
+        end
+    end
+
+    local width = math.max(longest, run) * each
 
     -- A bound of zero is a node that has not been measured yet, not a node with no room.
     if bound ~= nil and bound > 0 and width > bound then
-        return { width = bound, height = math.ceil(width / bound) * line }
+        return { width = bound, height = written * math.ceil(width / bound) * line }
     end
 
-    return { width = width, height = line }
+    return { width = width, height = written * line }
 end
 
 --- Builds a renderer that records what it is told instead of drawing it.
@@ -196,6 +227,7 @@ function M.create()
         batches = {},
         calls = {},
         events = {},
+        ground = nil,
         capabilities = { text = true, image = true, list = true, video = false, webview = false },
     }, Renderer)
 end

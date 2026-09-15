@@ -1,6 +1,8 @@
 package dev.varn.gui
 
+import android.view.MotionEvent
 import android.view.View
+import android.view.inputmethod.BaseInputConnection
 import android.webkit.WebView
 import android.widget.*
 import org.json.JSONArray
@@ -36,13 +38,22 @@ object VarnProps {
                 (view as? VarnVideoView)?.volume = (value as? Number)?.toFloat() ?: 1f
                 (view as? VarnAudioView)?.setVolume((value as? Number)?.toFloat() ?: 1f)
             }
-            "rate" -> (view as? VarnVideoView)?.rate = (value as? Number)?.toFloat() ?: 1f
+            "rate" -> {
+                (view as? VarnVideoView)?.rate = (value as? Number)?.toFloat() ?: 1f
+                (view as? VarnAudioView)?.rate = (value as? Number)?.toFloat() ?: 1f
+            }
             "value" -> applyValue(value, view)
             "selected" -> (view as? RadioButton)?.isChecked = value as? Boolean ?: false
             "count" -> (view as? RatingBar)?.numStars = (value as? Number)?.toInt() ?: 5
             "options" -> applyOptions(value as? JSONArray, view)
             "spans" -> applySpans(value as? JSONArray, view, density)
             "source" -> applySource(value, view)
+            "sources" -> applySources(value as? JSONObject, view)
+            "linkColor" -> (view as? VarnRichEditor)?.linkColor = VarnStyle.color(value)
+            "slice" -> applySlice(value, view)
+            "sliceScale" -> (view as? VarnNineSliceView)?.setSliceScale(
+                (value as? Number)?.toFloat() ?: 1f
+            )
             "pointerEvents" -> applyPointerEvents(value as? String, view)
             "tint" -> {
                 (view as? VarnBlurView)?.setTint(value as? String)
@@ -50,6 +61,7 @@ object VarnProps {
             }
             "color" -> applyControlColour(value, view)
             "barContent" -> applyBarContent(value as? String, view)
+            "bars" -> applyBars(value as? JSONArray, view)
 
             "colors" -> (view as? VarnGradientView)?.setColors(value as? JSONArray)
 
@@ -63,7 +75,12 @@ object VarnProps {
 
             "center" -> (view as? VarnMapView)?.setCenter(value as? JSONObject)
 
-            "zoom" -> (view as? VarnMapView)?.setZoom((value as? Number)?.toDouble() ?: 14.0)
+            // A map is zoomed to a level and a camera to a factor, which are two different numbers under
+            // one name: each type reads the one it means rather than a second branch never being reached.
+            "zoom" -> {
+                (view as? VarnMapView)?.setZoom((value as? Number)?.toDouble() ?: 14.0)
+                (view as? VarnCameraView)?.zoom = (VarnValue.number(value) ?: 1.0).toFloat()
+            }
 
             "markers" -> (view as? VarnMapView)?.setMarkers(value as? JSONArray)
 
@@ -74,8 +91,6 @@ object VarnProps {
             "accuracy" -> (view as? VarnLocationView)?.setAccuracy(value as? String)
 
             "playing" -> (view as? VarnAudioView)?.setPlaying(value as? Boolean ?: false)
-
-            "position" -> (view as? VarnAudioView)?.setPosition((value as? Number)?.toDouble() ?: 0.0)
 
             "kind" -> (view as? VarnFilePicker)?.setKind(value as? String)
 
@@ -97,10 +112,19 @@ object VarnProps {
                 (view as? VarnVideoView)?.looping = value as? Boolean ?: false
                 (view as? VarnAudioView)?.setLoops(value as? Boolean ?: false)
             }
-            "autoplay" -> if (value as? Boolean == true) (view as? VideoView)?.start()
+            "autoplay" -> if (value as? Boolean == true) (view as? VarnVideoView)?.start()
             "controls" -> applyControls(value as? Boolean ?: true, view)
             "javaScriptEnabled" -> (view as? WebView)?.settings?.javaScriptEnabled = value as? Boolean ?: true
             "resizeMode" -> applyResizeMode(value as? String, view)
+            "filter" -> {
+                (view as? VarnPictureView)?.filter = matrix(value as? JSONArray)
+                (view as? VarnCameraView)?.filter = VarnCameraView.matrix(value as? JSONArray)
+                (view as? VarnVideoView)?.filter = VarnCameraView.matrix(value as? JSONArray)
+            }
+            "facing" -> (view as? VarnCameraView)?.facing = value as? String ?: "back"
+            "torch" -> (view as? VarnCameraView)?.torch = value as? Boolean ?: false
+            "audio" -> (view as? VarnCameraView)?.wantsAudio = value as? Boolean ?: false
+            "recording" -> (view as? VarnRecorderView)?.recording = value as? Boolean ?: false
             "disabled" -> view.isEnabled = !(value as? Boolean ?: false)
             "editable" -> view.isEnabled = value as? Boolean ?: true
             "secure" -> applySecure(value as? Boolean ?: false, view)
@@ -108,6 +132,15 @@ object VarnProps {
             "autoCapitalize" -> applyCapitalisation(value as? String, view)
             "autoCorrect" -> applyCorrection(value as? Boolean ?: true, view)
             "placeholderColor" -> VarnStyle.color(value)?.let { (view as? EditText)?.setHintTextColor(it) }
+
+            "autoFocus" -> if (value as? Boolean == true) {
+                view.post {
+                    view.requestFocus()
+
+                    view.context.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                        ?.showSoftInput(view, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+                }
+            }
             "keyboard" -> (view as? EditText)?.inputType = inputType(value as? String)
             "returnKey" -> (view as? EditText)?.imeOptions = imeAction(value as? String)
             "refreshing" -> (view as? VarnCollectionView)?.showRefreshing(value as? Boolean ?: false)
@@ -119,7 +152,6 @@ object VarnProps {
             "animating" -> view.visibility = if (value as? Boolean != false) View.VISIBLE else View.GONE
             "indeterminate" -> (view as? ProgressBar)?.isIndeterminate = value as? Boolean ?: false
             "thickness" -> applyThickness((value as? Number)?.toFloat() ?: 4f, view, density)
-            "display" -> applyDisplay(value as? String, view)
             "visible", "open" -> view.visibility = if (value as? Boolean == true) View.VISIBLE else View.GONE
             "url" -> (view as? WebView)?.loadUrl(value as? String ?: "")
             "html" -> (view as? WebView)?.loadDataWithBaseURL(null, value as? String ?: "", "text/html", "utf-8", null)
@@ -127,6 +159,16 @@ object VarnProps {
             "segments" -> applySegments(value as? JSONArray, view)
             "selectedIndex" -> applySelectedSegment((value as? Number)?.toInt() ?: 1, view)
             "accessibilityLabel" -> view.contentDescription = value as? String
+            "panAxis" -> (view as? VarnBoxView)?.panAxis = value as? String
+            "focusable" -> {
+                val wanted = value as? Boolean == true
+
+                view.isFocusable = wanted
+                view.isFocusableInTouchMode = wanted
+            }
+            "accessibilityRole" -> VarnAccess.role(view, value as? String)
+            "accessibilityState" -> VarnAccess.state(view, value as? JSONObject)
+            "accessibilityValue" -> VarnAccess.reading(view, value as? JSONObject)
             "testID" -> view.tag = value as? String
             "contentExtent" -> (view as? VarnCollectionView)?.setContentExtent(((value as? Number)?.toFloat() ?: 0f) * density)
             "horizontal" -> (view as? VarnCollectionView)?.setHorizontal(value as? Boolean ?: false)
@@ -138,6 +180,12 @@ object VarnProps {
     }
 
     private fun applyValue(value: Any?, view: View) {
+        // An editor holds a document rather than a string, which is the runs the tree carries.
+        if (view is VarnRichEditor) {
+            view.setValue(value as? JSONArray ?: JSONArray())
+            return
+        }
+
         if (view is VarnStepperView) {
             view.setValue((value as? Number)?.toDouble() ?: 0.0)
             return
@@ -184,6 +232,12 @@ object VarnProps {
                 val text = value as? String ?: ""
                 val field = view as? VarnTextField
 
+                // A word an input method is still composing is held in the field as a span of its own,
+                // and writing the tree's own value over it takes the half-written word away.
+                if (BaseInputConnection.getComposingSpanStart(view.text) >= 0) {
+                    return
+                }
+
                 if (field == null || !field.echoed(text)) {
                     if (view.text.toString() != text) {
                         view.setText(text)
@@ -209,6 +263,8 @@ object VarnProps {
 
     /** Says how a picture fills the frame the engine gave it, which is never the frame's own shape. */
     private fun applyResizeMode(mode: String?, view: View) {
+        (view as? VarnVideoView)?.resizeMode = mode ?: "contain"
+
         val image = view as? ImageView ?: return
 
         image.scaleType = when (mode) {
@@ -235,6 +291,53 @@ object VarnProps {
      * A status bar's clock and a navigation bar's gestures are drawn by the system over whatever the
      * application put behind them, and only the window may say whether they are drawn light or dark.
      */
+    /**
+     * Hides the system's own bars a screen no longer names, and brings back the ones it does.
+     *
+     * A bar that is hidden gives its room back to the window, so what the tree is avoiding changes with
+     * it and a screen stays correct across the change without doing anything. What a reader swipes to
+     * bring a hidden bar back is left as the platform's own, since taking that away is how an
+     * application traps somebody in itself.
+     */
+    private fun applyBars(bars: JSONArray?, view: View) {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) {
+            return
+        }
+
+        val window = (view.context as? android.app.Activity)?.window ?: return
+        val controller = window.insetsController ?: return
+
+        val shown = mutableSetOf<String>()
+
+        for (index in 0 until (bars?.length() ?: 0)) {
+            shown += bars?.optString(index) ?: continue
+        }
+
+        var hiding = 0
+
+        if (!shown.contains("status")) {
+            hiding = hiding or android.view.WindowInsets.Type.statusBars()
+        }
+
+        if (!shown.contains("navigation")) {
+            hiding = hiding or android.view.WindowInsets.Type.navigationBars()
+        }
+
+        controller.systemBarsBehavior =
+            android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+
+        if (hiding != 0) {
+            controller.hide(hiding)
+        }
+
+        val showing = (android.view.WindowInsets.Type.statusBars() or
+            android.view.WindowInsets.Type.navigationBars()) and hiding.inv()
+
+        if (showing != 0) {
+            controller.show(showing)
+        }
+    }
+
     private fun applyBarContent(content: String?, view: View) {
         if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) {
             return
@@ -312,14 +415,6 @@ object VarnProps {
         bar.minimumHeight = wanted.toInt()
     }
 
-    /** Says whether a picker is the compact one or the wheels, which is a choice the platform offers. */
-    private fun applyDisplay(display: String?, view: View) {
-        val wheel = display == "wheel"
-
-        (view as? DatePicker)?.calendarViewShown = !wheel
-        (view as? DatePicker)?.spinnersShown = wheel
-    }
-
     /** Says how coarsely a control counts, which a stepper and a slider both take. */
     private fun applyStep(step: Double?, view: View) {
         (view as? VarnStepperView)?.step = step ?: 1.0
@@ -358,33 +453,35 @@ object VarnProps {
 
     /** Draws a picture in one colour, which is what an icon carried as an image is. */
     private fun applyTint(value: Any?, view: View) {
-        val image = view as? ImageView ?: return
-        val colour = VarnStyle.color(value)
+        (view as? VarnPictureView)?.tint = VarnStyle.color(value)
+    }
 
-        if (colour == null) {
-            image.clearColorFilter()
-            return
+    /**
+     * Answers the colour matrix a filter arrived as, which the engine worked out rather than the caller.
+     *
+     * A matrix is twenty numbers read as four rows of five, which is the shape a `ColorMatrix` takes, so
+     * what the browser and iOS are sent is what Android applies.
+     */
+    private fun matrix(value: JSONArray?): FloatArray? {
+        if (value == null || value.length() != 20) {
+            return null
         }
 
-        image.setColorFilter(colour)
+        // The last column of each row is added to a channel, and a channel here counts to 255 rather
+        // than to one, which is the one thing this shape does not share with the other two.
+        return FloatArray(20) {
+            val number = value.optDouble(it, 0.0)
+
+            if (it % 5 == 4) (number * 255).toFloat() else number.toFloat()
+        }
     }
 
     private fun applyControls(showing: Boolean, view: View) {
-        val video = view as? VideoView ?: return
-
-        if (!showing) {
-            video.setMediaController(null)
-            return
-        }
-
-        val controller = android.widget.MediaController(view.context)
-        controller.setAnchorView(video)
-        video.setMediaController(controller)
+        (view as? VarnVideoView)?.showControls(showing)
     }
 
     private fun applyPoster(path: String?, view: View) {
-        val video = view as? VideoView ?: return
-        video.background = path?.let { android.graphics.drawable.Drawable.createFromPath(it) }
+        (view as? VarnVideoView)?.showPoster(path)
     }
 
     private fun applySource(value: Any?, view: View) {
@@ -392,9 +489,35 @@ object VarnProps {
 
         when (view) {
             is ImageView -> view.setImageURI(android.net.Uri.parse(path))
-            is VideoView -> view.setVideoURI(android.net.Uri.parse(path))
+            is VarnVideoView -> view.setVideoURI(android.net.Uri.parse(path))
             is VarnAudioView -> view.setSource(path)
+            is VarnNineSliceView -> view.setSource(path)
         }
+    }
+
+    /** Takes the artwork a frame draws each state with, which is what makes one a button that presses. */
+    private fun applySources(value: JSONObject?, view: View) {
+        val frame = view as? VarnNineSliceView ?: return
+        val named = mutableMapOf<String, String>()
+
+        for (state in value?.keys() ?: emptyList<String>().iterator()) {
+            (value?.opt(state) as? String)?.let { named[state] = it }
+        }
+
+        frame.setSources(named)
+    }
+
+    /** Takes where a picture is cut, which the engine sends as four numbers of its own pixels. */
+    private fun applySlice(value: Any?, view: View) {
+        val frame = view as? VarnNineSliceView ?: return
+        val cuts = value as? JSONObject ?: return
+
+        frame.setSlice(
+            cuts.optInt("top"),
+            cuts.optInt("right"),
+            cuts.optInt("bottom"),
+            cuts.optInt("left")
+        )
     }
 
     /** Refuses what does not fit as it is typed, since trimming it afterwards moves the caret. */
@@ -593,6 +716,10 @@ object VarnProps {
                 }
 
                 view.setOnClickListener { emit(id, event, null) }
+
+                // A box that answers a press is reached with a keyboard or a pad the way a button is,
+                // which a view only is when it says so before Android 26 decides it from being clickable.
+                view.isFocusable = true
                 showPress(view)
             }
 
@@ -609,12 +736,41 @@ object VarnProps {
                 box.onPressOut = { emit(id, event, null) }
             }
 
-            "onScroll" -> (view as? VarnCollectionView)?.onScroll = { x, y ->
-                emit(id, event, JSONObject().put("x", x / density).put("y", y / density))
+            "onScroll" -> (view as? VarnCollectionView)?.let { surface ->
+                surface.onScroll = { x, y ->
+                    emit(id, event, JSONObject().put("x", x / density).put("y", y / density))
+                }
+
+                surface.reportOffset()
             }
 
             "onScrollEnd" -> (view as? VarnCollectionView)?.onScrollEnd = { x, y ->
                 emit(id, event, JSONObject().put("x", x / density).put("y", y / density))
+            }
+
+            "onDoublePress" -> (view as? VarnBoxView)?.let { box ->
+                box.isClickable = true
+                box.onDoublePress = { emit(id, event, null) }
+            }
+
+            // A key reaches whatever has focus, which is what every platform delivers one to. The names
+            // are the browser's published set, since that is the only one all three can be mapped onto.
+            "onKeyDown", "onKeyUp" -> {
+                view.isFocusableInTouchMode = true
+
+                view.setOnKeyListener { _, code, key ->
+                    val named = if (key.action == android.view.KeyEvent.ACTION_DOWN) "onKeyDown" else "onKeyUp"
+
+                    emit(id, named, VarnKeys.payload(code, key))
+                    false
+                }
+            }
+
+            // A field and an editor both say where the caret is, and one branch answers for both of them,
+            // since a second branch by the same name is one a `when` never reaches.
+            "onSelectionChange" -> {
+                (view as? VarnTextField)?.onSelection = { where -> emit(id, event, where) }
+                (view as? VarnRichEditor)?.onSelection = { where -> emit(id, event, where) }
             }
 
             "onSwipe" -> (view as? VarnBoxView)?.let { box ->
@@ -622,9 +778,58 @@ object VarnProps {
                 box.onSwipe = { direction -> emit(id, event, JSONObject().put("direction", direction)) }
             }
 
+            // A finger following a path, which is what a slider is. One listener reports all three and
+            // the name reported is the phase the drag is in.
+            "onPanStart", "onPanMove", "onPanEnd" -> (view as? VarnBoxView)?.let { box ->
+                box.isClickable = true
+                box.onPan = { phase, x, y, dx, dy ->
+                    emit(
+                        id,
+                        phase,
+                        JSONObject()
+                            .put("x", x / density)
+                            .put("y", y / density)
+                            .put("dx", dx / density)
+                            .put("dy", dy / density),
+                    )
+                }
+            }
+
+            // The second button on a pointer, and the finger held that means the same thing. A view
+            // reports both through one listener, so where it happened is read off the last touch.
+            "onContextPress" -> {
+                view.isClickable = true
+
+                val where = {
+                    val at = (view as? VarnBoxView)?.touchedAt ?: Pair(0f, 0f)
+                    JSONObject().put("x", at.first / density).put("y", at.second / density)
+                }
+
+                view.setOnLongClickListener {
+                    emit(id, event, where())
+                    true
+                }
+
+                view.setOnContextClickListener {
+                    emit(id, event, where())
+                    true
+                }
+            }
+
             "onLongPress" -> view.setOnLongClickListener {
                 emit(id, event, null)
                 true
+            }
+
+            // One listener reports both, so the name reported is the phase the pointer is in rather than
+            // the event this binding was made for. The engine drops what the node has no handler for.
+            "onHoverIn", "onHoverOut" -> view.setOnHoverListener { _, motion ->
+                when (motion.actionMasked) {
+                    MotionEvent.ACTION_HOVER_ENTER -> emit(id, "onHoverIn", null)
+                    MotionEvent.ACTION_HOVER_EXIT -> emit(id, "onHoverOut", null)
+                }
+
+                false
             }
 
             // What a control was changed to and which of a set was chosen are the same reading, and a
@@ -639,14 +844,33 @@ object VarnProps {
 
             "onMarkerPress" -> (view as? VarnMapView)?.onMarkerPress = { marker -> emit(id, event, marker) }
 
-            "onError" -> (view as? VarnLocationView)?.onError = { problem -> emit(id, event, problem) }
+            "onError" -> {
+                (view as? VarnLocationView)?.onError = { problem -> emit(id, event, problem) }
+                (view as? VarnAudioView)?.onError = { message ->
+                    emit(id, event, JSONObject().put("message", message))
+                }
+                (view as? VarnVideoView)?.onError = { message ->
+                    emit(id, event, JSONObject().put("message", message))
+                }
+                (view as? VarnWebView)?.onError = { message ->
+                    emit(id, event, JSONObject().put("message", message))
+                }
+            }
+
+            "onWillLoad" -> (view as? VarnWebView)?.onWillLoad = { url ->
+                emit(id, event, JSONObject().put("url", url))
+            }
+
+            "onLoad" -> (view as? VarnWebView)?.onLoad = { url ->
+                emit(id, event, JSONObject().put("url", url))
+            }
 
             "onProgress" -> (view as? VarnAudioView)?.onProgress = { at -> emit(id, event, at) }
 
             "onReady" -> (view as? VarnAudioView)?.onReady = { about -> emit(id, event, about) }
 
             "onEnd" -> {
-                (view as? VideoView)?.setOnCompletionListener { emit(id, event, null) }
+                (view as? VarnVideoView)?.onEnd = { emit(id, event, null) }
                 (view as? VarnAudioView)?.onEnd = { emit(id, event, null) }
             }
 
@@ -742,6 +966,8 @@ object VarnProps {
 
     private fun bindChange(view: View, id: Int, event: String, emit: (Int, String, Any?) -> Unit) {
         when (view) {
+            is VarnRichEditor -> view.onDocument = { runs -> emit(id, event, runs) }
+
             is CompoundButton -> view.setOnCheckedChangeListener { _, checked ->
                 emit(id, event, checked)
             }

@@ -96,6 +96,101 @@ do
     fails(function() return gui.Slider { minimum = 10, maximum = 1 } end, "minimum")
 end
 
+-- A step of nought is refused, since the platform's own stepper raises rather than answers.
+--
+-- A `UIStepper` handed a step that is not positive throws where nothing catches it, which is the whole
+-- application gone for a prop nobody sanity checked. The same value is a control that cannot move
+-- anywhere else, so it is refused for all three rather than guarded on one.
+do
+    fails(function() return gui.Stepper { value = 1, step = 0 } end, "step")
+    fails(function() return gui.Stepper { value = 1, step = -2 } end, "step")
+    fails(function() return gui.Stepper { value = 1, step = "one" } end, "step")
+    fails(function() return gui.Slider { step = 0 } end, "step")
+    fails(function() return gui.Stepper { value = 1, minimum = 8, maximum = 2 } end, "minimum")
+
+    assert(gui.Stepper { value = 1, step = 0.5, minimum = 0, maximum = 10 } ~= nil,
+        "a stepper told how far it goes and how far one press moves it is built")
+
+    fails(function() return gui.Toast { message = "saved", duration = "a while" } end, "duration")
+
+    -- A mark is a drawing a renderer builds, so a rating of a million of them is a screen that never
+    -- comes back rather than a rating.
+    fails(function() return gui.Rating { value = 3, count = 1000000 } end, "count")
+    fails(function() return gui.Rating { value = 3, count = 0 } end, "count")
+    fails(function() return gui.Rating { value = 3, count = 2.5 } end, "count")
+    fails(function() return gui.Rating { value = 3, size = 0 } end, "size")
+    fails(function() return gui.Rating { value = 3, size = "big" } end, "size")
+
+    assert(gui.Rating { value = 3, count = 10, size = 18 } ~= nil, "a rating of ten marks is built")
+
+    -- What a label says is a string. A number is drawn as nothing at all by a renderer that reads one,
+    -- and is asked for its length by the measurement that sizes the box it goes in.
+    fails(function() return gui.Text { text = 42 } end, "text is a string")
+    fails(function() return gui.Text { text = "x", numberOfLines = -1 } end, "numberOfLines")
+    fails(function() return gui.Text { text = "x", numberOfLines = 1.5 } end, "numberOfLines")
+
+    -- Every section of a section list carries a header, so a list with nothing to draw one with dies
+    -- inside the window on the first section it reaches rather than where it was written.
+    local rows = { { id = 1 } }
+    local draw = function() return gui.Text { text = "x" } end
+
+    fails(function()
+        return gui.SectionList { sections = { { key = "a", data = rows } }, renderItem = draw }
+    end, "renderHeader")
+
+    fails(function()
+        return gui.SectionList { sections = { "a" }, renderItem = draw, renderHeader = draw }
+    end, "section 1")
+
+    fails(function()
+        return gui.SectionList { sections = { { key = "a", data = rows, footer = "sum" } },
+            renderItem = draw, renderHeader = draw }
+    end, "renderFooter")
+end
+
+-- The props every node takes are held to their shape, whatever the node is.
+--
+-- A handler that is not a function is a control that looks pressable and answers nothing: it crosses the
+-- bridge as what it is, the renderer binds nothing, and a press finds no function on this side. A key
+-- that is a table never matches the one the last render built, so the node is replaced on every commit
+-- and everything under it loses its state. A label and a test name are read as strings by three
+-- renderers and ignored as anything else.
+do
+    fails(function() return gui.Button { title = "Go", onPress = "go" } end, "onPress")
+    fails(function() return gui.Button { title = "Go", key = {} } end, "key")
+    fails(function() return gui.Button { title = "Go", ref = {} } end, "ref")
+    fails(function() return gui.Button { title = "Go", testID = 7 } end, "testID")
+    fails(function() return gui.Button { title = "Go", accessibilityLabel = 7 } end, "accessibilityLabel")
+    fails(function() return gui.Button { title = "Go", style = function() end } end, "style")
+
+    assert(gui.Button { title = "Go", key = 3, testID = "go", onPress = function() end } ~= nil,
+        "a key may be a number, since a list keyed by its own indices is a list")
+end
+
+-- A canvas draws a fill, a stroke or a text, and is told nothing else.
+--
+-- All three renderers walk the instructions and draw the three they know, so one none of them knows is
+-- drawn by none of them and reported by none of them either: the canvas comes out with a shape missing
+-- and nothing anywhere says which one or why. The same goes for a path of one point and a text with
+-- nowhere to be drawn.
+do
+    local square = { { 0, 0 }, { 10, 0 }, { 10, 10 }, { 0, 10 } }
+
+    fails(function() return gui.Canvas { commands = { { op = "circle", x = 4, y = 4 } } } end, "command 1")
+    fails(function() return gui.Canvas { commands = { { op = "fill", path = { { 0, 0 } } } } } end, "two points")
+    fails(function() return gui.Canvas { commands = { { op = "fill", path = { { 0 }, { 1, 1 } } } } } end, "starts at a point")
+    fails(function() return gui.Canvas { commands = { { op = "text", x = 1, y = 1 } } } end, "says what it draws")
+    fails(function() return gui.Canvas { commands = { { op = "text", text = "x", x = 1 } } } end, "two numbers")
+    fails(function() return gui.Canvas { commands = { { op = "stroke", path = square, width = 0 } } } end, "width")
+    fails(function() return gui.Canvas { commands = { { op = "fill", path = square, color = 7 } } } end, "colour")
+
+    assert(gui.Canvas { commands = {
+        { op = "fill", color = "primary", path = square },
+        { op = "stroke", color = "#16a34a", width = 4, path = square },
+        { op = "text", text = "drawn in Lua", x = 8, y = 8, size = 16 },
+    } } ~= nil, "what all three draw is built")
+end
+
 -- A determinate progress bar needs a value, and an indeterminate one does not.
 do
     fails(function() return gui.ProgressBar {} end, "value")
@@ -179,10 +274,69 @@ do
             end
         end
 
+        -- The front page says how many there are, and a number nobody checks is a number that drifts.
+        --
+        -- It had already gone stale once and gone stale again by eleven, which is what a reader meets
+        -- first: the count is read out of the same rows the reference is built from.
+        local declared = 0
+
+        for line in generated:gmatch("[^\n]+") do
+            if line:find("^| `") ~= nil then
+                declared = declared + 1
+            end
+        end
+
+        -- Everything on the public table is written down where somebody reads before they use it.
+        --
+        -- A module reachable as `gui.X` is API, and three of them had no page at all: a caller could see
+        -- `Router` in the table above and find nothing anywhere saying how a screen under one goes
+        -- somewhere. The reference is generated, so what it cannot cover is what this asks about.
+        local pages = ""
+
+        for _, name in ipairs({ "components", "architecture", "styling", "layout", "assets", "animation",
+            "lists", "forms", "writing", "events", "bridge", "porting", "controls" }) do
+            pages = pages .. fs.readFile("docs/" .. name .. ".md"):await()
+        end
+
+        local silent = {}
+
+        -- A component is a constructor, so what is left on the table as a table is a module.
+        for name, value in pairs(gui) do
+            if type(value) == "table" and pages:find("gui." .. name, 1, true) == nil then
+                silent[#silent + 1] = "gui." .. name
+            end
+        end
+
+        table.sort(silent)
+        assert(#silent == 0, "these are on the public table and no page mentions them: "
+            .. table.concat(silent, ", "))
+
+        local readme = fs.readFile("README.md"):await()
+        local said = tonumber(readme:match("There are (%d+), each declaring"))
+
+        assert(said == declared,
+            "the README says there are " .. tostring(said) .. " components and there are " .. declared)
+
+        -- Every page is reachable from the front, since one nothing links to is one nobody reads.
+        --
+        -- A page on the control themes was written, tested and linked from nowhere at all, so the only
+        -- way to it was knowing the filename. The index is what a reader arrives at, and the check is
+        -- the index rather than the page itself.
+        local orphaned = {}
+
+        for _, page in ipairs(fs.readdir("docs"):await()) do
+            if page:find("%.md$") ~= nil and readme:find("docs/" .. page, 1, true) == nil then
+                orphaned[#orphaned + 1] = page
+            end
+        end
+
+        table.sort(orphaned)
+        assert(#orphaned == 0, "the README links to none of these pages, so nobody arrives at them: "
+            .. table.concat(orphaned, ", "))
+
         print("gui.components ok")
     end)
 end
-
 
 -- A count is held to the ceiling it was given, and written out by the engine rather than by a renderer.
 do
@@ -221,10 +375,10 @@ end
 
 -- A control that draws its own text is as wide as that text plus its padding, counted once.
 --
--- The padding was declared twice for the ones that draw their own — once as what the type is naturally worth and again
--- in the style the renderer draws it with — and the engine added both. A badge showing a single digit
--- came out 32 across and 24 tall for a pill that is 20 by 20, so it hung off whatever it was counting
--- and covered the thing beside it.
+-- A control that draws its own text carries its padding twice over: once as what the type is naturally
+-- worth and again in the style the renderer draws it with. Adding both makes a badge showing a single
+-- digit 32 across for a pill that is 20 by 20, hanging off whatever it counts and covering what is
+-- beside it.
 do
     local function measured(node)
         local renderer = gui.headless()

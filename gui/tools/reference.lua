@@ -2,6 +2,19 @@ local support = require("gui.components.support")
 
 local M = {}
 
+--- Answers what a component is drawn by, which is a node, Lua, or either as the control theme says.
+local function drawnAs(declaration)
+    if declaration.host then
+        return "`" .. declaration.kind .. "`"
+    end
+
+    if declaration.platform ~= nil then
+        return "`" .. declaration.platform .. "` or Lua"
+    end
+
+    return "Lua"
+end
+
 local FAMILIES = require("gui.components.families")
 
 local function sorted(values)
@@ -67,8 +80,8 @@ function M.render()
 
         lines[#lines + 1] = "### " .. family.title
         lines[#lines + 1] = ""
-        lines[#lines + 1] = "| Component | Node | Props | Events | Defaults |"
-        lines[#lines + 1] = "|---|---|---|---|---|"
+        lines[#lines + 1] = "| Component | Node | Props | Events | Actions | Defaults |"
+        lines[#lines + 1] = "|---|---|---|---|---|---|"
 
         local entries = familyOf(family.module)
         for position = 1, #entries do
@@ -77,9 +90,10 @@ function M.render()
 
             lines[#lines + 1] = table.concat({
                 "| `" .. entry.name .. "` ",
-                "| " .. (declaration.host and "`" .. declaration.kind .. "`" or "Lua") .. " ",
+                "| " .. drawnAs(declaration) .. " ",
                 "| " .. names(declaration.props) .. " ",
                 "| " .. names(declaration.events) .. " ",
+                "| " .. names(declaration.actions) .. " ",
                 "| " .. defaults(declaration.defaults) .. " |",
             })
         end

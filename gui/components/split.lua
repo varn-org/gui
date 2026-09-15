@@ -13,6 +13,15 @@ local Divider = structure.Divider
 --- Where a pane sits when there is no room for it, which is exactly where it was and out of sight.
 local HELD = { position = "absolute", top = 0, right = 0, bottom = 0, left = 0, opacity = 0 }
 
+--- Where the pane that was opened goes when it is closed, which is back the way it came.
+---
+--- Faded where it stands it is drawn over the list it is leaving for the length of the fade, so a reader
+--- watching a screen close sees the list underneath with the leaving screen's own bar over it: a way back
+--- on a screen that has none, there and then gone. It travels off instead, which is what a pushed screen
+--- does on a phone and what it already did arriving.
+local AWAY = { position = "absolute", top = 0, right = 0, bottom = 0, left = 0,
+    transform = { translateX = "100%" } }
+
 --- A list beside what it opens, or one at a time when there is not room for both.
 ---
 --- A tablet, a phone turned sideways, a window sharing a screen with another and a folding phone that
@@ -95,7 +104,7 @@ M.SplitView = support.component("SplitView", {
 
             View {
                 key = "content",
-                style = together and { grow = 1 } or (showing and { grow = 1 } or HELD),
+                style = together and { grow = 1 } or (showing and { grow = 1 } or AWAY),
                 pointerEvents = (together or showing) and "auto" or "none",
                 transition = { duration = "fast" },
                 enter = animation.states("slideLeft").enter,

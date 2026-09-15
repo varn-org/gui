@@ -29,4 +29,12 @@ final class VarnSafeAreaView: UIView {
         VarnSystemBars.claim(value, by: ObjectIdentifier(self))
         window?.rootViewController?.setNeedsStatusBarAppearanceUpdate()
     }
+
+    func setBars(_ value: [String]) {
+        VarnSystemBars.claim(bars: value, by: ObjectIdentifier(self))
+
+        let controller = window?.rootViewController
+        controller?.setNeedsStatusBarAppearanceUpdate()
+        controller?.setNeedsUpdateOfHomeIndicatorAutoHidden()
+    }
 }

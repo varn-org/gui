@@ -1,4 +1,5 @@
 local gui = require("gui")
+local resolve = require("gui.style.resolve")
 local wire = require("gui.bridge.wire")
 
 local function start(description, options)
@@ -107,7 +108,7 @@ end
 -- A transform refuses a field no renderer knows what to do with.
 do
     local ok, message = pcall(function()
-        return gui.resolveStyle({ transform = { spin = 3 } }, gui.theme.create(), "compact")
+        return resolve.resolve({ transform = { spin = 3 } }, gui.theme.create(), "compact")
     end)
 
     assert(not ok, "an unknown transform field must be refused")

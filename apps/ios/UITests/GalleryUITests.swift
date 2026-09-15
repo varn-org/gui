@@ -11,6 +11,14 @@ final class GalleryUITests: XCTestCase {
     override func setUp() {
         super.setUp()
         continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+    }
+
+    /// An orientation outlives the test that set it, so every case after one that turns the phone runs
+    /// turned, and a case that measures what it is looking at measures it in the wrong width.
+    override func tearDown() {
+        XCUIDevice.shared.orientation = .portrait
+        super.tearDown()
     }
 
     /// Starts the gallery, opening straight onto one demo when it is named.
@@ -45,7 +53,7 @@ final class GalleryUITests: XCTestCase {
         launch()
 
         let row = element("Text fields")
-        XCTAssertTrue(row.exists, "the index must list what there is to see")
+        XCTAssertTrue(row.exists, "the index must list what there is to see, it says \(shown())")
 
         row.tap()
         XCTAssertTrue(text("Your name").waitForExistence(timeout: 8), "pressing a row must open what it names")
@@ -181,6 +189,94 @@ final class GalleryUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Delete this?"].exists, "and go once it is answered")
     }
 
+    /// Answers whether the host drew the banner it draws when a commit raised.
+    private func brokeDown() -> Bool {
+        app.staticTexts.allElementsBoundByIndex.contains { $0.label.hasPrefix("the screen could not be drawn") }
+    }
+
+    /// Opening an address and coming back off it is the shape every router has, and it took the
+    /// application down: the screen a pop takes off rendered once against the route it was leaving for,
+    /// found no parameter of its own, and raised inside the commit.
+    func testGoingBackOffAnAddressDoesNotTakeTheScreenDown() {
+        launch("screens/routes")
+
+        element("kettle").tap()
+        XCTAssertTrue(text("at /items/kettle").waitForExistence(timeout: 8), "the address opens the screen it names")
+
+        element("Back").tap()
+        XCTAssertTrue(element("kettle", 8).exists, "the way back brings the catalogue with it")
+        XCTAssertFalse(brokeDown(), "coming back off an address must not raise inside the commit")
+    }
+
+    /// Going somewhere and coming back is a round trip, and the trail must be the same length after one.
+    ///
+    /// The router set the address itself while its own state change was still queued, so the render in
+    /// between put the screen it had just left back on the trail. Three round trips left three catalogues
+    /// drawn on top of each other, with a way back to a screen the reader had already left.
+    func testRoundTripsLeaveNothingBehind() {
+        launch("screens/routes")
+
+        for item in ["kettle", "lamp", "rug"] {
+            element(item).tap()
+            XCTAssertTrue(text("at /items/\(item)").waitForExistence(timeout: 8), "\(item) opened")
+
+            element("Back").tap()
+            XCTAssertTrue(element("kettle", 8).exists, "and the catalogue came back")
+        }
+
+        // One catalogue, drawn once. A trail that grew draws the row once per screen it kept.
+        let rows = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "kettle"))
+
+        XCTAssertEqual(rows.count, 1, "the catalogue is on screen once, it is there \(rows.count) times")
+        XCTAssertFalse(brokeDown(), "and nothing raised on the way")
+    }
+
+    /// Answers everything written on the screen, which is what a failure is explained with.
+    private func shown() -> String {
+        app.descendants(matching: .any).allElementsBoundByIndex
+            .map { $0.label }
+            .filter { !$0.isEmpty }
+            .joined(separator: " | ")
+    }
+
+    /// Opening a message and coming back off it brings the whole inbox with it.
+    ///
+    /// What a reader waits for is the screen underneath being whole again, and a row of that list carries
+    /// a name of its own, which hides the labels inside it from the accessibility tree — so what says the
+    /// inbox is back is the row rather than anything written in it.
+    func testComingBackOffAMessageBringsTheInboxWithIt() {
+        launch("apps/mail")
+
+        element("Friday's numbers").tap()
+        XCTAssertTrue(text("Reply").waitForExistence(timeout: 8), "the message opened")
+
+        element("Inbox").tap()
+
+        XCTAssertTrue(element("Sunday", 10).exists, "the inbox came back, the screen says \(shown())")
+        XCTAssertFalse(brokeDown(), "and nothing raised on the way")
+    }
+
+    /// A turn of the phone is a width that changed, and it arrives while everything is still on screen.
+    func testTurningThePhoneKeepsTheScreenWhole() {
+        launch("screens/routes")
+
+        element("kettle").tap()
+        XCTAssertTrue(text("at /items/kettle").waitForExistence(timeout: 8), "the screen opened")
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        _ = text("at /items/kettle").waitForExistence(timeout: 8)
+        XCTAssertFalse(brokeDown(), "turning the phone must not raise inside the commit")
+
+        XCUIDevice.shared.orientation = .portrait
+        XCTAssertTrue(text("at /items/kettle").waitForExistence(timeout: 8), "and the screen is still whole")
+        XCTAssertFalse(brokeDown(), "turning it back must not either")
+
+        // A screen laid out for the width it is on reaches across it, rather than being left in a column
+        // the width of the one it was turned from.
+        let shown = text("at /items/kettle").frame
+        XCTAssertGreaterThan(shown.width, 120, "the screen is laid out for the width it is on, is \(shown.width)")
+    }
+
     func testAMenuOffersWhatItHoldsAndReportsTheChoice() {
         launch("presentation/menus")
 
@@ -313,19 +409,45 @@ final class GalleryUITests: XCTestCase {
         XCTAssertTrue(pick.waitForExistence(timeout: 8), "the cover offers a way to choose a picture")
 
         pick.tap()
-        sleep(3)
 
         // The library belongs to another process, so what proves it opened is that the gallery is no
-        // longer the thing on screen.
-        XCTAssertFalse(element("Home", 2).isHittable, "the system's own library is what a press opens")
+        // longer the thing on screen. It may be covered or gone from the snapshot entirely, and asking
+        // an element that is gone whether it can be pressed raises rather than answering no.
+        let home = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Home")).firstMatch
+        let covered = NSPredicate(format: "exists == NO OR isHittable == NO")
+
+        wait(for: [expectation(for: covered, evaluatedWith: home)], timeout: 12)
 
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.09, dy: 0.115)).tap()
-        sleep(2)
+
+        XCTAssertTrue(pick.waitForExistence(timeout: 12), "and closing it brings the screen back")
 
         let said = app.staticTexts.allElementsBoundByIndex.map { $0.label }.joined(separator: " | ")
 
         XCTAssertFalse(said.lowercased().contains("could not"), "nothing about a failure is left behind: \(said)")
         XCTAssertFalse(said.lowercased().contains("no prop named"), "and the screen still draws: \(said)")
+    }
+
+    /// A frame drawn from artwork answers a finger, which is what makes the same component a button.
+    ///
+    /// A nine-slice is a box the platform paints with a picture rather than a control of its own, so
+    /// nothing about it being pressable comes for free: the tree says it reports a press and the renderer
+    /// has to have bound one. A frame that draws beautifully and answers nothing is the failure here.
+    func testAFrameDrawnFromArtworkAnswersAFinger() {
+        launch("frames/nineslice")
+
+        let update = element("Update")
+        XCTAssertTrue(update.waitForExistence(timeout: 8), "the dialogue offers a way to take the update")
+
+        update.tap()
+
+        XCTAssertTrue(text("The update was taken", 8).exists,
+                      "pressing the frame is what the screen reports, it says \(shown())")
+
+        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        shot.lifetime = .keepAlways
+        shot.name = "frames"
+        add(shot)
     }
 
     /// The chat opens a conversation, answers what is written into it, and looks like the screen it is.
@@ -354,12 +476,16 @@ final class GalleryUITests: XCTestCase {
         add(shot)
 
         // The other side answers a moment later, which is what makes it read as a conversation.
-        sleep(3)
+        //
+        // Which of its answers comes back depends on how much has been said, and a bubble may be read
+        // through the row that carries it, so any of them anywhere in a label is the answer arriving.
+        let answered = NSPredicate(format:
+            "label CONTAINS 'Of course' OR label CONTAINS 'Sending' OR label CONTAINS 'Done'")
+        let reply = app.descendants(matching: .any).matching(answered).firstMatch
 
         let replies = app.staticTexts.allElementsBoundByIndex.map { $0.label }.joined(separator: " | ")
 
-        XCTAssertTrue(replies.contains("Of course") || replies.contains("Sending") || replies.contains("Done"),
-                      "and the other side answers: \(replies)")
+        XCTAssertTrue(reply.waitForExistence(timeout: 12), "the other side answers: \(replies)")
     }
 
     /// Leaving a screen is a move a reader watches, the same as arriving is.

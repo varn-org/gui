@@ -244,11 +244,24 @@ class VarnCollectionView(context: Context) : VarnBoxView(context) {
     }
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        val had = if (horizontal) this.width else this.height
+        val scrollable = extent - had
+        val ended = scrollable > 1f && offset >= scrollable - 1f
         val width = if (horizontal) maxOf(extent.toInt(), right - left) else right - left
         val height = if (horizontal) bottom - top else maxOf(extent.toInt(), bottom - top)
 
         content.layoutParams = ViewGroup.LayoutParams(width, height)
         content.layout(0, 0, width, height)
+
+        val room = if (horizontal) right - left else bottom - top
+
+        // A surface showing the end of what it holds goes on showing it when the room it has shrinks,
+        // which is what the keyboard coming up does to a conversation: the composer rises with it and
+        // the message being answered would otherwise slide away under the keyboard.
+        if (ended && room < had) {
+            offset = maxOf(0f, extent - room)
+        }
+
         place()
     }
 
@@ -262,6 +275,17 @@ class VarnCollectionView(context: Context) : VarnBoxView(context) {
 
         offset = clamped
         place()
+        reportOffset()
+    }
+
+    /**
+     * Says where the surface is now, which is what the engine asks for the moment it starts listening.
+     *
+     * A surface only ever reported the next time a finger moved it, so an engine that had just been told
+     * to care took the surface to be at the top: a field was lifted from the wrong place and the surface
+     * was put back somewhere it had never been.
+     */
+    fun reportOffset() {
         onScroll?.invoke(if (horizontal) offset else 0f, if (horizontal) 0f else offset)
     }
 
@@ -274,28 +298,43 @@ class VarnCollectionView(context: Context) : VarnBoxView(context) {
     }
 
     /**
-     * Keeps every box the tree pinned against the leading edge as the surface moves under it.
+     * Keeps every box the tree pinned against the leading edge as the surface moves under it, and over
+     * whatever arrives beneath it.
      *
-     * The tree cannot do this: a commit follows a finger rather than leading it, so a header placed
-     * from there drifts across the rows it is meant to cover on every flick.
+     * The tree cannot do the first: a commit follows a finger rather than leading it, so a header placed
+     * from there drifts across the rows it is meant to cover on every flick. It cannot do the second
+     * either: a row realised while the surface scrolls is inserted where the tree puts it, which is
+     * under the header it belongs to and over it on the screen.
+     *
+     * Raising a child reorders the whole content and asks for a layout, so it is done once something
+     * loose has landed above it rather than on every frame, and after the walk rather than during one —
+     * `bringToFront` moves the child it is given to the end of the very array being walked.
      */
     fun hold() {
-        for (index in 0 until content.childCount) {
-            val box = content.getChildAt(index) as? VarnBoxView ?: continue
+        var covered: MutableList<VarnBoxView>? = null
+        var loose = false
 
-            if (box.pinned == null) {
+        for (index in content.childCount - 1 downTo 0) {
+            val box = content.getChildAt(index) as? VarnBoxView
+
+            if (box?.pinned == null) {
+                loose = true
                 continue
             }
-
-            box.bringToFront()
 
             if (horizontal) {
                 box.translationX = box.held(offset, box.width) - box.left
-                continue
+            } else {
+                box.translationY = box.held(offset, box.height) - box.top
             }
 
-            box.translationY = box.held(offset, box.height) - box.top
+            if (loose) {
+                val raising = covered ?: mutableListOf<VarnBoxView>().also { covered = it }
+                raising.add(box)
+            }
         }
+
+        covered?.asReversed()?.forEach { it.bringToFront() }
     }
 
     /** Answers the view the engine parents its cells to, which is the layer that scrolls. */

@@ -173,4 +173,64 @@ do
     assert(cells:freeCount("default") <= 24, "the pool stays bounded, got " .. cells:freeCount("default"))
 end
 
+-- Where an entry sits and which entry sits at an offset are the same answer, read from either end.
+--
+-- A list of a hundred thousand rows of different heights is arithmetic nobody can check by eye: an
+-- offset that disagrees with the index it came from is a scroll that jumps, a cell drawn over another,
+-- or a window that realises a row nobody can see. Random heights, some measured and some still
+-- estimated, driven from both ends and compared.
+do
+    math.randomseed(19)
+
+    local entries = data(2000)
+    local view = window.create({ data = entries, estimatedItemExtent = 44 })
+
+    -- A screen measures what it draws, which is a moving part of the list rather than all of it.
+    for index = 1, #entries, 3 do
+        view:measure(index, math.random(20, 120))
+    end
+
+    local last = -1
+
+    for index = 1, #entries do
+        local at = view:offsetOf(index)
+
+        assert(at >= last, "an entry never starts before the one in front of it, " .. index .. " is at " .. at)
+        last = at
+
+        local extent = view:extentAt(index)
+        assert(extent > 0, "every entry has a height, " .. index .. " has " .. extent)
+
+        -- The offset of an entry belongs to that entry, and so does every point inside it.
+        assert(view:indexAt(at) == index,
+            "the entry at its own offset is itself, " .. index .. " answered " .. view:indexAt(at))
+        assert(view:indexAt(at + extent / 2) == index,
+            "and so is the middle of it, " .. index .. " answered " .. view:indexAt(at + extent / 2))
+    end
+
+    local total = view:totalExtent()
+    local counted = 0
+
+    for index = 1, #entries do
+        counted = counted + view:extentAt(index)
+    end
+
+    assert(math.abs(total - counted) < 0.001,
+        "the whole is what its entries add up to, " .. total .. " against " .. counted)
+
+    -- What is realised at an offset is what covers the viewport, wherever the offset falls.
+    for _ = 1, 200 do
+        local offset = math.random() * math.max(0, total - 800)
+        local visible = view:visible(offset, 800)
+
+        assert(visible.first >= 1 and visible.last <= #entries,
+            "the range stays inside the data, " .. visible.first .. " to " .. visible.last)
+        assert(view:offsetOf(visible.first) <= offset + 0.001,
+            "the first entry realised starts at or before the offset")
+        assert(view:offsetOf(visible.last) + view:extentAt(visible.last) >= offset + 800 - 0.001
+            or visible.last == #entries,
+            "and the last one reaches the bottom of the viewport")
+    end
+end
+
 print("gui.collections ok")

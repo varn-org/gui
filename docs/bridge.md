@@ -19,9 +19,10 @@ The removed sentinel travels as the string `__varn_removed__`, because a table c
 
 ## What a renderer must guarantee
 
-- **A move keeps identity.** A view that moves is the same view, with its scroll position, its focus and its animation state intact. Rebuilding it is a conformance failure.
+- **A move keeps identity.** A view that moves is the same view, with its scroll position, its focus and its animation state intact. Rebuilding it is a conformance failure. So is quietly ending what it holds: on a platform where a move is performed as a detach and an attach, a sound must go on reporting where it is, a recording must go on being recorded, and a device is let go of on `remove` rather than on the view leaving a window.
 - **An update is partial.** A prop that was not in the batch keeps the value it had.
 - **A frame is relative** to the node the child was inserted into, and in points rather than pixels. A renderer adds a child to its parent, so the parent's origin is already applied — an absolute frame would have to be flattened into one layer, and then nothing could clip, scroll or move as a subtree.
+- **A `layer` hangs from the surface**, whatever parent its insert names, and its frame is against the surface rather than against that parent. It is the one node the engine lays out as a tree of its own, which is what puts an overlay written inside a screen over the whole application instead of over the box it was written in. Layers stack in the order they were inserted, above everything else the surface holds, and a layer takes no touch of its own — what is inside one does.
 - **Order is exact.** Operations are applied in the order they arrive, since a later one may depend on an earlier one.
 - **A malformed batch is refused**, not applied in part.
 
@@ -39,6 +40,12 @@ A prop a component declares is a prop something reads. `gui/tests/promises_test.
 | A press | `hitSlop`, `onPressIn`, `onPressOut`, `disabled` | Grows the touch area by `hitSlop` and reports both edges of the press. A control shows the platform's own feedback while it is held. |
 | A box | `pointerEvents`, `overflow`, `opacity`, `transform` | A box with no handler and `pointerEvents` unset lets a touch through to whatever sits under it. A scrolling view always clips. |
 | Rich text | `spans` | Draws the runs with their own styles inside one paragraph, so a link is part of the sentence rather than a view beside it. |
+| A camera | `facing`, `zoom`, `torch`, `audio` | Opens the device when the node is built and lets it go when the node goes, since a camera left open is the light still on over a screen nobody is looking at. The permission each platform requires is asked for through the host that owns the window. |
+| A look | `Image.filter`, `Video.filter`, `Camera.filter` | Applies the matrix it is given to the pixels. The arithmetic is done in Lua and the matrix crosses as twenty numbers, so one filter is one picture on all three. |
+| A microphone | `Recorder.recording` | Told whether it should be running rather than asked to start, reports `onReady` once it is, and stopping it is what produces the file. |
+| A frame | `NineSlice.source`, `NineSlice.slice`, `NineSlice.sliceScale` | Draws the picture cut into nine, over the box rather than inside it, so what the engine placed inside one is not moved by the border. The cuts arrive as `{ top, right, bottom, left }` in the picture's own pixels however the caller wrote them, and `sliceScale` is how many points one of those pixels comes out at. The pieces are drawn without smoothing. |
+
+A value equal to what `gui.protocol.removed` carries means clear the prop rather than set it, which is how a prop that was there and is not any more crosses.
 
 A prop reaching a renderer is already resolved: spacing and radii are numbers, colours are literal, and a frame is in points. A renderer carries no theme and no layout of its own.
 
@@ -96,6 +103,10 @@ The name is the prop, so a node with `onPress` receives `onPress`. A renderer ne
 | `onPress`, `onLongPress`, `onSubmit`, `onFocus`, `onBlur` | Nothing | `null` |
 | `onScroll`, `onScrollEnd` | The offset it reached | `{ "x": 0, "y": 240 }` |
 | `onSelect` | The entry and where it sits | `{ "item": …, "index": 3 }` |
+| `onDoublePress` | Nothing | `null` |
+| `onKeyDown`, `onKeyUp` | The key and what was held down with it | `{ "key": "Enter", "shift": false, "ctrl": false, "alt": false, "meta": true, "repeat": false }` |
+| `onSelectionChange` | Where the caret is, counted in characters, and what is on there | `{ "start": 4, "end": 12, "marks": {} }` |
+| `onChange` on an editor | The document, as runs carrying marks | `[{ "text": "one", "marks": { "bold": true } }]` |
 | `onLayout` | Answered by the engine's own layout, never by a renderer | — |
 
 ## What the platform reports
@@ -110,7 +121,11 @@ The name is the prop, so a node with `onPress` receives `onPress`. A renderer ne
 | `gui.back` | Nothing | The innermost thing on screen offering a way back takes it |
 | `gui.stop` | Nothing | The tree comes down: every screen hears it is going, every timer a screen asked for ends, and everything a node opened is given back |
 
-A host sends `gui.stop` when it is finished with the surface. Stopping the loop alone leaves every screen mounted, every timer a screen asked for firing and everything a node opened still open, on an interface nobody is looking at.
+A host sends `gui.stop` when it is finished with the surface. Stopping the loop alone leaves every screen mounted, every timer a screen asked for firing and everything a node opened still open, on an interface nobody is looking at. An event is delivered by the loop rather than in place, so a host emits it and then gives the loop one more tick: a pump taken away in the same breath never delivers the message at all.
+
+A number in a payload is a number the platform worked out, and one that is not finite — a scroll offset during a rubber band, a fraction with nothing to divide by — is dropped and reported rather than delivered, since it would reach the window that decides which cells exist. A surface, a safe area, a keyboard height and a theme are checked the same way, where they arrive.
+
+An event reaches the tree inside the engine's own delivery, where a failure is written to the engine's log and to nowhere a reader can see, so every one of them is handled through a guard that reports instead: a handler that raises, a batch the platform refuses or a layout that cannot be taken is named through `onProblem` and the surface goes on answering. The same holds in the other direction on the web, where the engine calls the page from inside a wasm frame: an exception raised there unwinds frames no handler can catch and leaves the runtime dead, so every registered call answers something and reports what went wrong.
 
 `host.gui_surface()` answers the same things at start — `platform`, `width`, `height`, `scale`, `appearance` and `safeArea` — so an application is themed and inset correctly on its first frame rather than after one repaint. Light and dark come from the platform, so an application carries no switch of its own for something the reader already set on their device.
 
@@ -136,7 +151,7 @@ It is asked once per type. A number written into the tree instead is a number th
 
 ## Capabilities
 
-A renderer declares what it can do at start, so a component that needs a native picker fails loudly on a renderer that has none rather than rendering nothing.
+A renderer declares what it can do at start, so a screen that needs a camera or a native picker can ask before it draws one. The answer is read with `renderer:can(name)`, and a name a renderer never declared answers false.
 
 ```
 host.gui_capabilities() → { text = true, video = false, … }
@@ -144,7 +159,7 @@ host.gui_capabilities() → { text = true, video = false, … }
 
 The names are in `gui/bridge/conformance.lua`. Two of them say what a renderer wants handed to it rather than what it can do: `fontBytes` and `imageBytes` mean it shares no filesystem with the engine, so a font and a picture arrive as bytes instead of as a path. That is what a browser is.
 
-`platform` in the surface description is `"ios"`, `"android"` or `"web"`. It is read in exactly one place — `gui/style/chrome.lua`, which says how tall a navigation bar is and what a back button looks like. Layout, styling and behaviour never read it.
+`platform` in the surface description is `"ios"`, `"android"` or `"web"`. Nothing decides anything from it except `gui/style/chrome.lua`, which is asked how tall a bar is, how tall a row is and what a back button looks like — a component that reads the name only hands it there. How much room there is, which is what tells a tablet from a phone, is the breakpoint rather than the name, and layout, styling and behaviour read neither.
 
 ## Imperative actions
 

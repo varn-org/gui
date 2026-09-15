@@ -1,5 +1,6 @@
 local async = require("async")
 local gui = require("gui")
+local waitFor = require("gui.tests.waiting")
 
 --- Answers a runtime drawing into a headless renderer, which is what the operations are read back from.
 local function start(description, options)
@@ -47,6 +48,28 @@ do
     assert(timing.delay == 0, "a transition with no delay must carry nought")
     assert(#timing.easing == 4, "an easing must reach the renderer as four control points")
     assert(timing.easing[1] == 0.42 and timing.easing[3] == 0.58, "easeInOut must carry its own curve")
+end
+
+-- A length of time that is not one is refused where it is written.
+--
+-- A duration reaches three renderers as a number of milliseconds, so anything else is a transition
+-- each of them makes something different of: a curve that never runs, one that runs backwards, or a
+-- cast that fails inside the platform's own animator.
+do
+    local refused = {
+        { duration = {} },
+        { duration = -200 },
+        { duration = 200, delay = "soon" },
+        { duration = 200, delay = -1 },
+    }
+
+    for index = 1, #refused do
+        local ok = pcall(gui.animation.transition, refused[index])
+        assert(not ok, "a transition of " .. tostring(refused[index].duration) .. " must be refused")
+    end
+
+    local named = gui.animation.transition("fast")
+    assert(named.duration == gui.animation.durations.fast, "a duration written by name still resolves")
 end
 
 -- The state a node arrives from is resolved the way any other style is.
@@ -236,8 +259,10 @@ async.run(function()
 
     assert(leavingStates == 1, "a leaving node must be given the state to animate towards")
 
-    async.sleep(180):await()
-    drain(runtime)
+    waitFor(function()
+        drain(runtime)
+        return #found(renderer, "text") == 0
+    end)
 
     assert(#found(renderer, "text") == 0, "what a presence holds must go once its exit has had its time")
 

@@ -309,6 +309,17 @@ final class ChromeTests: XCTestCase {
 
         list.contentOffset = CGPoint(x: 0, y: 2000)
         XCTAssertEqual(header.frame.origin.y, 1170, "and it stays pushed off past the end of its range")
+
+        // A row realised while the surface scrolls is inserted where the tree puts it, which is after
+        // the header it belongs under, so the header has to be drawn over what arrives beneath it.
+        try renderer.apply([
+            ["op": "create", "id": 62, "type": "view", "props": [:]],
+            ["op": "insert", "id": 62, "parent": 60, "index": 2],
+            ["op": "frame", "id": 62, "x": 0, "y": 1200, "width": 390, "height": 44],
+        ])
+
+        XCTAssertTrue(list.contentView.subviews.last === header,
+                      "a row that arrives beneath a held box does not cover it")
     }
 
     /// A finger that lands on a drawing inside a control presses the control.

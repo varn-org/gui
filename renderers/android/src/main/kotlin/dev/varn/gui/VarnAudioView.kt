@@ -2,6 +2,7 @@ package dev.varn.gui
 
 import android.content.Context
 import android.media.MediaPlayer
+import android.media.PlaybackParams
 import android.os.Handler
 import android.os.Looper
 import android.view.View
@@ -14,7 +15,7 @@ import org.json.JSONObject
  * and where to be, and it reports where it has got to and how long the whole thing is.
  */
 class VarnAudioView(context: Context) : View(context), VarnReleasing {
-    private val player = MediaPlayer()
+    val player = MediaPlayer()
 
     /** Whether the player this held has been given back, after which it answers nothing. */
     var closed = false
@@ -29,6 +30,15 @@ class VarnAudioView(context: Context) : View(context), VarnReleasing {
     var onReady: ((JSONObject) -> Unit)? = null
     var onEnd: (() -> Unit)? = null
 
+    /** Told when the sound cannot be played at all, which is otherwise a button that does nothing. */
+    var onError: ((String) -> Unit)? = null
+
+    var rate: Float = 1f
+        set(value) {
+            field = value
+            speed()
+        }
+
     private val tick = object : Runnable {
         override fun run() {
             report()
@@ -38,6 +48,11 @@ class VarnAudioView(context: Context) : View(context), VarnReleasing {
 
     init {
         visibility = GONE
+
+        player.setOnErrorListener { _, what, extra ->
+            onError?.invoke("the sound could not be played ($what, $extra)")
+            true
+        }
 
         player.setOnPreparedListener {
             prepared = true
@@ -49,6 +64,7 @@ class VarnAudioView(context: Context) : View(context), VarnReleasing {
 
             if (wanted) {
                 player.start()
+                speed()
             }
         }
 
@@ -59,11 +75,6 @@ class VarnAudioView(context: Context) : View(context), VarnReleasing {
         }
 
         ticker.postDelayed(tick, TICK)
-    }
-
-    override fun onDetachedFromWindow() {
-        ticker.removeCallbacks(tick)
-        super.onDetachedFromWindow()
     }
 
     override fun release() {
@@ -88,6 +99,8 @@ class VarnAudioView(context: Context) : View(context), VarnReleasing {
         runCatching {
             player.setDataSource(value)
             player.prepareAsync()
+        }.onFailure { problem ->
+            onError?.invoke(problem.message ?: "the sound could not be opened")
         }
     }
 
@@ -104,6 +117,7 @@ class VarnAudioView(context: Context) : View(context), VarnReleasing {
 
         if (value) {
             player.start()
+            speed()
             return
         }
 
@@ -118,13 +132,31 @@ class VarnAudioView(context: Context) : View(context), VarnReleasing {
         player.setVolume(value, value)
     }
 
-    /** Moves to a moment, which is what a scrubber asks for and never what playing reports back. */
-    fun setPosition(seconds: Double) {
-        if (!prepared || kotlin.math.abs(player.currentPosition / 1000.0 - seconds) <= 0.25) {
+    /** Moves to a moment, which is a reader dragging a scrubber rather than anything the tree describes. */
+    fun seek(seconds: Double) {
+        if (closed || !prepared) {
             return
         }
 
-        player.seekTo((seconds * 1000).toInt())
+        val bound = player.duration / 1000.0
+        val wanted = seconds.coerceIn(0.0, if (bound > 0) bound else seconds)
+
+        player.seekTo((wanted * 1000).toInt())
+        report()
+    }
+
+    /**
+     * Applies how fast the sound plays, which a player only takes while it is running.
+     *
+     * Handing a speed to one that is paused starts it, so it is applied where playing starts rather
+     * than the moment the tree asks for it.
+     */
+    private fun speed() {
+        if (closed || !prepared || !player.isPlaying) {
+            return
+        }
+
+        player.playbackParams = PlaybackParams().setSpeed(rate)
     }
 
     private fun report() {

@@ -52,6 +52,21 @@ local function fromHex(text)
     return { red, green, blue, alpha }
 end
 
+--- Answers the alpha a colour call carries, which is one when it carries none.
+local function alphaOf(piece, text)
+    if piece == nil then
+        return 1
+    end
+
+    local alpha = tonumber(piece)
+
+    if alpha == nil then
+        error("the alpha of a colour is a number, got " .. text, 0)
+    end
+
+    return alpha
+end
+
 local function fromFunction(text)
     local name, body = text:match("^(%a+)%(([^)]*)%)$")
     if name == nil then
@@ -64,15 +79,30 @@ local function fromFunction(text)
     end
 
     if name == "rgb" or name == "rgba" then
-        local alpha = parts[4] ~= nil and tonumber(parts[4]) or 1
-        return { tonumber(parts[1]), tonumber(parts[2]), tonumber(parts[3]), alpha }
+        local red = tonumber(parts[1] or "")
+        local green = tonumber(parts[2] or "")
+        local blue = tonumber(parts[3] or "")
+
+        if red == nil or green == nil or blue == nil then
+            error("an rgb colour takes three numeric channels, got " .. text, 0)
+        end
+
+        return { red, green, blue, alphaOf(parts[4], text) }
     end
 
     if name == "hsl" or name == "hsla" then
-        local hue = tonumber((parts[1]:gsub("deg", ""))) % 360 / 360
-        local saturation = tonumber((parts[2]:gsub("%%", ""))) / 100
-        local lightness = tonumber((parts[3]:gsub("%%", ""))) / 100
-        local alpha = parts[4] ~= nil and tonumber(parts[4]) or 1
+        local degrees = tonumber(((parts[1] or ""):gsub("deg", "")))
+        local percent = tonumber(((parts[2] or ""):gsub("%%", "")))
+        local level = tonumber(((parts[3] or ""):gsub("%%", "")))
+
+        if degrees == nil or percent == nil or level == nil then
+            error("an hsl colour takes a hue in degrees and two percentages, got " .. text, 0)
+        end
+
+        local hue = degrees % 360 / 360
+        local saturation = percent / 100
+        local lightness = level / 100
+        local alpha = alphaOf(parts[4], text)
 
         local function channel(shift)
             local value = (hue + shift) % 1
@@ -101,7 +131,17 @@ end
 --- Reads a colour written as a name, a hex string, or an rgb, rgba, hsl or hsla call.
 function M.parse(value)
     if type(value) == "table" then
-        return { value[1] or 0, value[2] or 0, value[3] or 0, value[4] == nil and 1 or value[4] }
+        local red, green, blue, alpha = value[1], value[2], value[3], value[4]
+
+        if type(red) ~= "number" or type(green) ~= "number" or type(blue) ~= "number" then
+            error("a colour written as a table carries three numeric channels", 0)
+        end
+
+        if alpha ~= nil and type(alpha) ~= "number" then
+            error("the alpha of a colour is a number", 0)
+        end
+
+        return { red, green, blue, alpha == nil and 1 or alpha }
     end
 
     if type(value) ~= "string" then
@@ -158,7 +198,7 @@ function M.darken(value, amount)
 end
 
 --- Answers the relative luminance, which is what deciding a readable foreground rests on.
-function M.luminance(value)
+local function luminance(value)
     local channels = M.parse(value)
 
     local function component(raw)
@@ -175,8 +215,8 @@ end
 
 --- Answers the contrast ratio between two colours, the way the accessibility guidelines define it.
 function M.contrast(first, second)
-    local a = M.luminance(first)
-    local b = M.luminance(second)
+    local a = luminance(first)
+    local b = luminance(second)
     local lighter = math.max(a, b)
     local darker = math.min(a, b)
 

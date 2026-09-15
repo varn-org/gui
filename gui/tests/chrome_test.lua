@@ -1,11 +1,12 @@
 local chrome = require("gui.style.chrome")
 local gui = require("gui")
 
-local function start(description, platform)
+local function start(description, platform, insets)
     local renderer = gui.headless()
     local runtime = gui.start(description, renderer, {
         size = { width = 390, height = 844 },
         platform = platform,
+        insets = insets,
     })
 
     for _ = 1, 4 do
@@ -112,19 +113,29 @@ end
 -- visibly right of the middle, which is what the bar did. The two sides claim the same width for this,
 -- and the trailing one is there holding nothing precisely so that they can.
 do
-    local function titled(back, actions)
+    local function titled(back, trailing)
         local _, renderer = start(gui.NavigationStack {
             index = 2,
-            actions = actions,
+            trailing = trailing,
             screens = {
                 { key = "one", title = back, content = gui.Text { text = "First" } },
                 { key = "two", title = "Text", content = gui.Text { text = "Second" } },
             },
         }, "ios")
 
+        -- A frame is relative to the box that holds it, and how the bar is built out of boxes is the
+        -- bar's business, so where the title sits on the bar is read by walking back up to the bar.
         for _, node in pairs(renderer.nodes) do
             if node.type == "text" and node.props.text == "Text" and node.frame ~= nil then
-                return node.frame
+                local x = node.frame.x
+                local parent = renderer.nodes[node.parent]
+
+                while parent ~= nil and parent.frame ~= nil and parent.frame.width ~= 390 do
+                    x = x + parent.frame.x
+                    parent = renderer.nodes[parent.parent]
+                end
+
+                return { x = x, width = node.frame.width }
             end
         end
     end
@@ -307,6 +318,301 @@ do
 
     assert(leaving ~= nil, "and it is drawn on its way out rather than cut")
     assert(leaving.props.transition ~= nil, "with a time to take over it")
+end
+
+--- Answers where a node sits on the surface, which is every frame above it added up.
+local function placed(renderer, node)
+    local top = node.frame.y
+    local left = node.frame.x
+    local parent = renderer.nodes[node.parent]
+
+    while parent ~= nil and parent.frame ~= nil do
+        top = top + parent.frame.y
+        left = left + parent.frame.x
+        parent = renderer.nodes[parent.parent]
+    end
+
+    return { top = top, left = left, bottom = top + node.frame.height, height = node.frame.height }
+end
+
+--- Answers the one node of a type whose named prop says what was asked for.
+local function carrying(renderer, kind, name, value)
+    for _, node in pairs(renderer.nodes) do
+        if node.type == kind and node.props[name] == value then
+            return node
+        end
+    end
+
+    return nil
+end
+
+-- What a bar holds is centred in the bar, not on the strip the system draws its own bar over.
+--
+-- The bar runs to the top of the glass and takes that strip into itself, so what a reader sees is one
+-- bar rather than a painted band with a bar under it. Centring in the whole of that would put the title
+-- under the clock, so what it holds is centred in the part below the strip.
+do
+    local insets = { top = 59, right = 0, bottom = 34, left = 0 }
+
+    local _, renderer = start(gui.NavigationStack {
+        index = 2,
+        screens = {
+            { key = "one", title = "Library", content = gui.Text { text = "First" } },
+            { key = "two", title = "Album", content = gui.Text { text = "Second" } },
+        },
+    }, "ios", insets)
+
+    local title = carrying(renderer, "text", "text", "Album")
+    local look = chrome.bar("ios")
+
+    assert(title ~= nil, "the bar must carry the title of the screen being read")
+
+    local where = placed(renderer, title)
+    local middle = insets.top + look.height / 2
+
+    assert(math.abs(where.top + where.height / 2 - middle) <= 1,
+        "a title is centred in the bar, which is at " .. middle .. ", and it is at "
+            .. (where.top + where.height / 2))
+
+    assert(where.top >= insets.top,
+        "and nothing it holds is drawn under the status bar, the title starts at " .. where.top)
+
+    -- Everything in the bar is centred on the same line, whatever it is drawn out of.
+    local back = carrying(renderer, "text", "text", "Library")
+    local behind = placed(renderer, back)
+
+    assert(math.abs(behind.top + behind.height / 2 - middle) <= 1,
+        "the way back is centred on the same line, it is at " .. (behind.top + behind.height / 2))
+end
+
+-- A bar inside a safe area that already took the top inset does not take it again.
+do
+    local insets = { top = 59, right = 0, bottom = 34, left = 0 }
+
+    local _, renderer = start(gui.SafeArea {
+        style = { grow = 1 },
+
+        gui.AppBar { title = "Inbox" },
+    }, "ios", insets)
+
+    local title = carrying(renderer, "text", "text", "Inbox")
+    local look = chrome.bar("ios")
+    local where = placed(renderer, title)
+
+    assert(math.abs(where.top + where.height / 2 - (insets.top + look.height / 2)) <= 1,
+        "a bar under a safe area is drawn once rather than inset twice, its title is at " .. where.top)
+end
+
+-- A bar takes items on either side, each of them something a finger can land on.
+do
+    local pressed = { leading = 0, trailing = 0 }
+
+    local _, renderer = start(gui.AppBar {
+        title = "Inbox",
+        leading = { { key = "menu", icon = "menu", accessibilityLabel = "Menu",
+            onPress = function() pressed.leading = pressed.leading + 1 end } },
+        trailing = {
+            { key = "search", icon = "search", accessibilityLabel = "Search",
+                onPress = function() pressed.trailing = pressed.trailing + 1 end },
+            { key = "edit", label = "Edit", onPress = function() pressed.trailing = pressed.trailing + 1 end },
+        },
+    }, "ios")
+
+    local found = {}
+
+    for _, node in pairs(renderer.nodes) do
+        if node.type == "pressable" then
+            found[node.props.accessibilityLabel] = node
+        end
+    end
+
+    assert(found.Menu ~= nil, "an item on the leading side is drawn")
+    assert(found.Search ~= nil and found.Edit ~= nil, "and every item on the trailing side")
+
+    for name, node in pairs(found) do
+        assert(node.frame.width >= chrome.touch and node.frame.height >= chrome.touch,
+            name .. " is smaller than a finger, " .. node.frame.width .. " by " .. node.frame.height)
+    end
+
+    assert(holds(renderer, "Edit"), "an item carrying a word draws the word")
+end
+
+-- A bar item is refused where it was written rather than drawn as nothing.
+do
+    local refused = function(build, needle)
+        local ok, problem = pcall(build)
+
+        assert(not ok, "the bar should have refused " .. needle)
+        assert(tostring(problem):find(needle, 1, true) ~= nil,
+            "and said so, it said " .. tostring(problem))
+    end
+
+    refused(function() return gui.AppBar { title = "A", trailing = { {} } } end, "shows nothing")
+    refused(function() return gui.AppBar { title = "A", trailing = { { icon = "nonsense" } } } end, "nonsense")
+    refused(function() return gui.AppBar { title = "A", leading = { { label = "A", onPress = 3 } } } end, "function")
+end
+
+-- The large title belongs to the bar, and the bar's rule waits until it has collapsed.
+--
+-- Drawn inside the screen it is a heading with the bar's own rule cut straight across the top of it,
+-- which is what the mail application looked like, and it can never give way to the small title.
+do
+    local function bar(scrolled)
+        local _, renderer = start(gui.AppBar { title = "Inbox", largeTitle = true, scrolled = scrolled }, "ios")
+        local look = chrome.bar("ios")
+        local rules = 0
+        local titles = {}
+
+        for _, node in pairs(renderer.nodes) do
+            if node.type == "divider" then
+                rules = rules + 1
+            end
+
+            if node.type == "text" and node.props.text == "Inbox" and node.props.style ~= nil then
+                titles[#titles + 1] = node
+            end
+        end
+
+        -- A style crosses resolved, so the two titles are told apart by the size they are drawn at
+        -- rather than by the name the bar asked for.
+        table.sort(titles, function(first, second)
+            return first.props.style.fontSize > second.props.style.fontSize
+        end)
+
+        if #titles == 1 then
+            return { rules = rules, big = nil, small = titles[1], look = look, renderer = renderer }
+        end
+
+        return { rules = rules, big = titles[1], small = titles[2], look = look, renderer = renderer }
+    end
+
+    local open = bar(0)
+
+    assert(open.big ~= nil, "the bar draws the large title")
+    assert(open.rules == 0, "and draws no rule across it")
+    assert(open.small ~= nil and open.small.props.style.opacity == 0,
+        "and the small title is not shown while the large one is")
+
+    local gone = bar(200)
+
+    assert(gone.rules == 1, "once the reader has scrolled it away the bar draws its rule")
+    assert(gone.small.props.style.opacity == 1, "and the small title is what is left")
+    assert(gone.big == nil, "with nothing of the large one left")
+end
+
+-- A bar with no large title draws its own rule, so nothing around it has to.
+do
+    local _, renderer = start(gui.AppBar { title = "Inbox" }, "ios")
+    local rules = 0
+
+    for _, node in pairs(renderer.nodes) do
+        if node.type == "divider" then
+            rules = rules + 1
+        end
+    end
+
+    assert(rules == 1, "a bar draws one rule of its own, drew " .. rules)
+end
+
+-- The first screen a stack ever shows is drawn where it is rather than arriving.
+--
+-- A push is a screen arriving over the one it covers, and the first screen covers nothing: it came from
+-- nowhere, so animating it is the application sliding in from the side of the glass as it opens. Every
+-- platform draws the first one and animates the rest, and a caller may ask for either.
+do
+    local function arriving(renderer)
+        local found = 0
+
+        for _, node in pairs(renderer.nodes) do
+            if node.props.enter ~= nil then
+                found = found + 1
+            end
+        end
+
+        return found
+    end
+
+    local Stack = gui.component({
+        name = "Pushing",
+        state = { deep = 1 },
+
+        render = function(self)
+            return gui.NavigationStack {
+                index = self.state.deep,
+                transition = self.props.transition,
+                animatesFirstScreen = self.props.animatesFirstScreen,
+                screens = {
+                    { key = "one", title = "One", content = gui.Text { text = "First" } },
+                    { key = "two", title = "Two", content = gui.Text { text = "Second" } },
+                },
+            }
+        end,
+    })
+
+    local runtime, renderer = start(Stack {}, "ios")
+
+    assert(arriving(renderer) == 0, "the first screen is drawn where it is, "
+        .. arriving(renderer) .. " arrived")
+
+    runtime.root.instance:setState({ deep = 2 })
+    runtime:commit()
+
+    assert(arriving(renderer) == 1, "and a screen pushed over it arrives, " .. arriving(renderer) .. " did")
+
+    -- A caller who wants no move at all gets none, on the first screen and on every push after it.
+    local quiet, without = start(Stack { transition = "none" }, "ios")
+
+    quiet.root.instance:setState({ deep = 2 })
+    quiet:commit()
+
+    assert(arriving(without) == 0, "a stack told to use no move animates nothing")
+
+    -- And one that wants the application to arrive as it opens says so.
+    local _, opening = start(Stack { animatesFirstScreen = true }, "ios")
+
+    assert(arriving(opening) == 1, "a stack told to animate its first screen does")
+end
+
+-- A screen says which of the system's own bars the reader still sees, and it crosses as it was written.
+do
+    local renderer = gui.headless()
+
+    gui.start(gui.SafeArea { style = { grow = 1 }, gui.Text { text = "whole" } },
+        renderer, { size = { width = 390, height = 844 } })
+
+    local area = renderer:find("safearea")
+
+    assert(#area.props.bars == 2, "a screen that says nothing keeps both bars, kept " .. #area.props.bars)
+end
+
+do
+    local renderer = gui.headless()
+
+    gui.start(gui.SafeArea { bars = {}, style = { grow = 1 }, gui.Text { text = "whole" } },
+        renderer, { size = { width = 390, height = 844 } })
+
+    assert(#renderer:find("safearea").props.bars == 0, "a game takes the whole glass by naming none")
+end
+
+do
+    local renderer = gui.headless()
+
+    gui.start(gui.SafeArea { bars = { "status" }, style = { grow = 1 }, gui.Text { text = "half" } },
+        renderer, { size = { width = 390, height = 844 } })
+
+    local kept = renderer:find("safearea").props.bars
+
+    assert(#kept == 1 and kept[1] == "status", "and one may be kept while the other goes")
+end
+
+-- A bar that is not a bar is refused where it was written rather than ignored by three renderers.
+do
+    local ok, problem = pcall(function()
+        return gui.SafeArea { bars = { "toolbar" }, gui.Text { text = "no" } }
+    end)
+
+    assert(not ok, "a name the system has no bar for must be refused")
+    assert(tostring(problem):find("toolbar", 1, true) ~= nil, "and the refusal must name it")
 end
 
 print("gui.chrome ok")

@@ -132,6 +132,41 @@ do
     end
 end
 
+-- Two children of one node under one key are refused, since a key names one child.
+--
+-- Written that way the second takes the first's place in the index the diff matches against, the first
+-- matches nothing on the commit after and is taken down, and a row a screen drew disappears with nothing
+-- anywhere saying why. Both are drawn on the first commit, so it never surfaces where it was written.
+do
+    local twice = function()
+        return diff.mount(View {
+            Text { key = "same", text = "first" },
+            Text { key = "same", text = "second" },
+        })
+    end
+
+    local ok, problem = pcall(twice)
+
+    assert(not ok, "two children under one key must be refused")
+    assert(tostring(problem):find("carry the key same", 1, true) ~= nil,
+        "and the refusal must name the key, it said " .. tostring(problem))
+
+    -- One key per node, so the same key under two different parents is two different children.
+    local fine = diff.mount(View {
+        View { key = "left", Text { key = "label", text = "one" } },
+        View { key = "right", Text { key = "label", text = "two" } },
+    })
+
+    assert(#fine.children == 2, "a key is only ever compared against its own siblings")
+
+    local after = pcall(diff.reconcile, fine, View {
+        View { key = "left", Text { key = "label", text = "one" } },
+        View { key = "left", Text { key = "label", text = "two" } },
+    })
+
+    assert(not after, "and a commit that introduces one is refused as well")
+end
+
 -- A child that is genuinely gone is removed, and a new one is created.
 do
     local node = diff.mount(View { Text { key = "a", text = "a" }, Text { key = "b", text = "b" } })
@@ -165,10 +200,10 @@ end
 
 -- A key is what says two nodes of the same type are different things, wherever the node sits.
 --
--- A component's own root was compared on its type alone, so a component saying it is showing something
--- else by changing the key was patched in place instead of replaced. Nothing about it was new, so
--- nothing it declared to arrive from was ever applied: every overlay, every drawer and every pushed
--- screen appeared in a single frame while the way out of them animated correctly.
+-- A component's own root compared on its type alone is patched in place when the key says it is
+-- something else. Nothing about it is then new, so nothing it declared to arrive from is applied and
+-- every overlay, drawer and pushed screen reaches the screen in a single frame while the way out of
+-- them animates correctly.
 do
     local gui = require("gui")
 
@@ -225,6 +260,179 @@ do
     assert(arrived ~= nil, "a root under a new key must be created, not patched into the old one")
     assert(arrived.props.enter.opacity == 0, "and it must carry what it arrives from")
     assert(arrived.props.transition ~= nil, "and how long the arrival takes")
+end
+
+-- A tree mutated at random reaches the renderer as exactly the tree the description says.
+--
+-- Reordering, replacing and removing are where a reconciler goes wrong quietly: the ops apply, the
+-- renderer holds a tree, and it is not the one the description named. Eighty rounds of insert, remove,
+-- move, replace and re-key at random depths are compared node for node, and every batch is checked for
+-- an op that names something the same batch removed.
+do
+    local gui = require("gui")
+
+    math.randomseed(11)
+
+    --- Answers a description built from a shape, which is what both sides are compared against.
+    local function describe(shape)
+        local children = {}
+
+        for index = 1, #shape do
+            local entry = shape[index]
+
+            if entry.kind == "text" then
+                children[index] = gui.Text { key = entry.key, text = entry.label }
+            else
+                children[index] = gui.View { key = entry.key, style = { height = entry.height },
+                    table.unpack(describe(entry.children)) }
+            end
+        end
+
+        return children
+    end
+
+    --- Answers what the renderer holds, as the shape a description would have built.
+    local function held(node)
+        local shape = {}
+
+        for index = 1, #node.children do
+            local child = node.children[index]
+
+            if child.type == "text" then
+                shape[index] = { kind = "text", label = child.props.text }
+            else
+                shape[index] = { kind = "view", height = child.props.style.height, children = held(child) }
+            end
+        end
+
+        return shape
+    end
+
+    --- Answers whether what was asked for and what is drawn are the same tree.
+    local function same(wanted, drawn, path)
+        if #wanted ~= #drawn then
+            return path .. ": " .. #wanted .. " children asked for, " .. #drawn .. " drawn"
+        end
+
+        for index = 1, #wanted do
+            local one, other = wanted[index], drawn[index]
+            local at = path .. "/" .. index
+
+            if one.kind ~= other.kind then
+                return at .. ": a " .. one.kind .. " asked for, a " .. other.kind .. " drawn"
+            end
+
+            if one.kind == "text" and one.label ~= other.label then
+                return at .. ": " .. one.label .. " asked for, " .. tostring(other.label) .. " drawn"
+            end
+
+            if one.kind == "view" then
+                if one.height ~= other.height then
+                    return at .. ": " .. one.height .. " tall asked for, " .. tostring(other.height) .. " drawn"
+                end
+
+                local wrong = same(one.children, other.children, at)
+                if wrong ~= nil then
+                    return wrong
+                end
+            end
+        end
+
+        return nil
+    end
+
+    local next = 0
+
+    local function entry(depth)
+        next = next + 1
+
+        if depth <= 0 or math.random() < 0.55 then
+            return { kind = "text", key = "k" .. next, label = "label " .. next }
+        end
+
+        local children = {}
+
+        for index = 1, math.random(0, 3) do
+            children[index] = entry(depth - 1)
+        end
+
+        return { kind = "view", key = "k" .. next, height = math.random(10, 60), children = children }
+    end
+
+    --- Changes a shape the way a screen changes: something arrives, leaves, moves or becomes another thing.
+    local function mutate(shape, depth)
+        local roll = math.random()
+
+        if #shape > 0 and roll < 0.2 then
+            table.remove(shape, math.random(#shape))
+        elseif #shape > 1 and roll < 0.4 then
+            local from = math.random(#shape)
+            table.insert(shape, math.random(#shape), table.remove(shape, from))
+        elseif #shape > 0 and roll < 0.55 then
+            shape[math.random(#shape)] = entry(depth - 1)
+        elseif #shape > 0 and roll < 0.7 then
+            local at = math.random(#shape)
+
+            if shape[at].kind == "text" then
+                shape[at].label = "label " .. math.random(1000)
+            else
+                shape[at].height = math.random(10, 60)
+            end
+        else
+            table.insert(shape, math.random(#shape + 1), entry(depth - 1))
+        end
+
+        for index = 1, #shape do
+            if shape[index].kind == "view" and math.random() < 0.4 then
+                mutate(shape[index].children, depth - 1)
+            end
+        end
+
+        return shape
+    end
+
+    local shape = {}
+
+    for index = 1, 4 do
+        shape[index] = entry(2)
+    end
+
+    local Screen = gui.component({
+        name = "Fuzzed",
+        state = { round = 0 },
+        render = function() return gui.View { style = { grow = 1 }, table.unpack(describe(shape)) } end,
+    })
+
+    local renderer = gui.headless()
+    local app = gui.start(Screen {}, renderer, { size = { width = 390, height = 844 } })
+
+    for round = 1, 80 do
+        mutate(shape, 3)
+
+        local before = #renderer.batches
+        app.root.instance:setState({ round = round })
+        app:commit()
+
+        for index = before + 1, #renderer.batches do
+            local batch = renderer.batches[index]
+            local gone = {}
+
+            for position = 1, #batch do
+                local op = batch[position]
+
+                assert(op.id == nil or gone[op.id] == nil,
+                    "round " .. round .. ": " .. op.op .. " names node " .. tostring(op.id)
+                        .. ", which the same batch removed")
+
+                if op.op == "remove" then
+                    gone[op.id] = true
+                end
+            end
+        end
+
+        local wrong = same(shape, held(renderer:tree()[1]), "round " .. round)
+        assert(wrong == nil, "the tree drawn is not the tree asked for, " .. tostring(wrong))
+    end
 end
 
 print("gui.diff ok")

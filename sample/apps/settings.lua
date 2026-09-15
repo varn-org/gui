@@ -24,6 +24,8 @@ local Settings = gui.component({
         goodbye = false,
         name = "Paulo Coutinho",
         email = "paulo@example.com",
+        about = "",
+        initials = "PC",
         saved = false,
     },
 
@@ -71,9 +73,14 @@ local Settings = gui.component({
     end,
 
     Main = function(self)
+        local insets = gui.environment:read(self).insets
+
         return gui.ScrollView {
             style = { grow = 1 },
-            contentStyle = { gap = "lg", paddingVertical = "md" },
+
+            -- The list runs under whatever the system draws over the bottom of the glass and stops
+            -- above it, so the last row is one a finger can reach.
+            contentStyle = { gap = "lg", paddingTop = "md", paddingBottom = 24 + insets.bottom },
             keyboardDismissMode = "on-drag",
 
             gui.Pressable {
@@ -125,12 +132,39 @@ local Settings = gui.component({
                 }),
             }),
 
+            self:Group("Storage", {
+                self:Row("downloads", "Keep for reading offline", gui.Switch {
+                    value = self.state.offline == true,
+                    onChange = function(value) self:setState({ offline = value }) end,
+                }, self.state.offline and "About 240 MB" or "Nothing kept"),
+                self:Row("quality", "Picture quality", gui.SegmentedControl {
+                    segments = { "Light", "Full" },
+                    selectedIndex = self.state.quality or 2,
+                    onChange = function(index) self:setState({ quality = index }) end,
+                    style = { width = 150 },
+                }),
+            }),
+
+            self:Group("About", {
+                self:Row("version", "Version", gui.Text {
+                    text = "1.4.2",
+                    style = { color = "textMuted" },
+                }),
+                self:Row("terms", "Terms", gui.Icon { name = "chevron-right", size = 16, color = "textMuted" }),
+                self:Row("privacy", "Privacy", gui.Icon { name = "chevron-right", size = 16, color = "textMuted" }),
+            }),
+
             gui.View { style = { paddingHorizontal = "md" },
                 gui.Button {
                     title = "Delete the account",
                     variant = "destructive",
                     onPress = function() self:setState({ confirming = true }) end,
                 },
+            },
+
+            gui.Text {
+                text = "Signed in as " .. self.state.email,
+                style = { fontSize = "footnote", color = "textMuted", textAlign = "center" },
             },
         }
     end,
@@ -144,8 +178,12 @@ local Settings = gui.component({
                 keyboardDismissMode = "on-drag",
 
                 gui.View { style = { align = "center", gap = "sm", paddingVertical = "md" },
-                    gui.Avatar { initials = "PC", size = 88 },
-                    gui.Button { title = "Change the picture", variant = "plain", onPress = function() end },
+                    gui.Avatar { initials = self.state.initials, size = 88 },
+                    gui.Button {
+                        title = "Change the picture",
+                        variant = "plain",
+                        onPress = function() self:setState({ picking = true }) end,
+                    },
                 },
 
                 gui.TextInput {
@@ -163,7 +201,27 @@ local Settings = gui.component({
                     onChange = function(value) self:setState({ email = value, saved = false }) end,
                 },
 
-                gui.TextArea { placeholder = "Anything else", rows = 4, onChange = function() end },
+                gui.TextArea {
+                    placeholder = "Anything else",
+                    rows = 4,
+                    value = self.state.about,
+                    onChange = function(value) self:setState({ about = value, saved = false }) end,
+                },
+
+                gui.ActionSheet {
+                    visible = self.state.picking == true,
+                    title = "The letters a face is drawn as",
+                    cancelLabel = "Keep it",
+                    actions = {
+                        { key = "PC", label = "PC" },
+                        { key = "P", label = "P" },
+                        { key = "PA", label = "PA" },
+                    },
+                    onAction = function(key)
+                        self:setState({ initials = key, picking = false, saved = false })
+                    end,
+                    onDismiss = function() self:setState({ picking = false }) end,
+                },
 
                 gui.Button {
                     title = self.state.saved and "Saved" or "Save",

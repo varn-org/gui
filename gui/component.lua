@@ -33,6 +33,10 @@ end
 
 --- The moments a component is told about, which are the ones a platform tells a screen about.
 ---
+--- Nine of them are about the screen and two about the application. `onPause` carries which state it is
+--- going to — in front and not taking input, or out of sight and possibly about to be ended — since what
+--- is worth doing differs: a game pauses at the first and a draft is saved at the second.
+---
 --- Mounting is a screen being built and unmounting is it being taken down, which is what iOS calls
 --- loading and Android calls creating. Appearing is it being shown, which is a different thing: a stack
 --- keeps the screen under the one on top, and a tab bar keeps every tab, so a screen that is built is
@@ -48,6 +52,8 @@ local LIFECYCLE = {
     onUpdate = true,
     onWillUnmount = true,
     onUnmount = true,
+    onPause = true,
+    onResume = true,
 }
 
 local RESERVED = {
@@ -65,13 +71,16 @@ Instance.__index = Instance
 
 --- Merges the given fields into the state and asks for a commit, which happens once however often this is called.
 function Instance:setState(changes)
+    if type(changes) ~= "table" then
+        error("state is a table of the fields to change, got " .. type(changes), 2)
+    end
+
     if self.rendering then
         error("setState cannot be called from inside render, since a commit would then run inside a commit", 2)
     end
 
-    -- Written as `value ~= none and value or nil` this stored nothing for `false`, since that is the
-    -- middle of an `and`/`or` and Lua takes the other branch for it. Every state a screen set to false
-    -- became nil, which reads as false everywhere except against false itself.
+    -- False is the middle of an `and`/`or` and Lua takes the other branch for it, so what a screen
+    -- asked to be cleared is told apart from what it set to false by a check rather than by a fallback.
     for key, value in pairs(changes) do
         if value == M.none then
             self.state[key] = nil
@@ -98,10 +107,8 @@ function Instance:after(milliseconds, work)
     local async = require("async")
     local delay = math.max(0, math.floor(milliseconds + 0.5))
 
-    async.spawn(function()
-        local slept = pcall(function() async.sleep(delay):await() end)
-
-        if not slept or not self.mounted then
+    local run = function()
+        if not self.mounted then
             return
         end
 
@@ -110,25 +117,69 @@ function Instance:after(milliseconds, work)
         if not ok and self.scheduler ~= nil then
             self.scheduler.report("something a component asked to happen later failed: " .. tostring(problem))
         end
+    end
+
+    async.spawn(function()
+        local slept = pcall(function() async.sleep(delay):await() end)
+
+        if not slept or not self.mounted then
+            return
+        end
+
+        if self.scheduler ~= nil and self.scheduler.holds(run) then
+            return
+        end
+
+        run()
     end)
 end
 
---- Answers whether this is on screen, which is what the thing showing it says rather than the tree.
-function Instance:visible()
-    if not self.watchesVisibility then
-        return true
+--- Answers the handle this component holds under a name, which is the same one on every render.
+---
+--- A ref built in the render is a new handle on every commit, pointing at nothing until the commit that
+--- follows, and one built in `onMount` does not exist for the first render at all — which is a screen
+--- whose first press reaches nothing. Naming it here is what makes it one handle for the life of the
+--- component, built the first time it is asked for.
+function Instance:ref(name)
+    if self.refs == nil then
+        self.refs = {}
     end
 
-    return require("gui.visibility").of(self)
+    if self.refs[name] == nil then
+        self.refs[name] = require("gui.ref").create()
+    end
+
+    return self.refs[name]
+end
+
+--- Answers whether this is on screen, which is what the thing showing it says rather than the tree.
+---
+--- A component told about appearing is rendered again when what shows it changes its mind, since the
+--- moment is fired from the render that follows. One that only asks is answered without that, so a
+--- question asked from a timer costs nothing and no component is rendered for an answer nothing draws.
+function Instance:visible()
+    local visibility = require("gui.visibility")
+
+    if self.watchesVisibility then
+        return visibility.of(self)
+    end
+
+    return visibility.showing(self)
 end
 
 --- Runs work over and over while the component is on screen, which is what anything that pulses needs.
 ---
 --- Writing the loop by hand is a component that schedules itself again from inside its own handler, and
---- one that forgets to stop is a screen that has been left still ticking.
+--- one that forgets to stop is a screen that has been left still ticking. A tab bar keeps every tab and
+--- a stack keeps the screen under the one on top, so a pulse that ran on being mounted alone would run
+--- for the life of the application on a screen nobody can see, asking for a commit each time. A turn
+--- taken out of sight is skipped rather than ended, so the pulse is there again on coming back.
 function Instance:every(milliseconds, work)
     self:after(milliseconds, function()
-        work(self)
+        if self:visible() then
+            work(self)
+        end
+
         self:every(milliseconds, work)
     end)
 end
@@ -158,10 +209,26 @@ function M.define(definition)
         error("a component needs a render function", 2)
     end
 
+    -- A component declared inside a render is a different kind on every commit, so what it drew is torn
+    -- down and built again each time: the screen comes out blank and nothing at all is reported. It is
+    -- declared once, where it is written, and used from wherever it is needed.
+    if scheduler ~= nil and scheduler.rendering ~= nil and scheduler.rendering() then
+        error("a component is declared once rather than inside a render, which builds a new one each time", 2)
+    end
+
     -- A definition may carry helper methods beside render, and an instance reaches them like any other.
+    --
+    -- One named as something every component already answers is refused rather than allowed to take its
+    -- place: the component would work and everything the engine calls that method for would quietly get
+    -- the caller's instead, which is a screen that draws nothing with nothing anywhere saying why.
     local methods = setmetatable({}, { __index = Instance })
     for key, value in pairs(definition) do
         if type(value) == "function" and not RESERVED[key] then
+            if Instance[key] ~= nil then
+                error((definition.name or "a component") .. " cannot have a method named " .. key
+                    .. ", since that is one every component already answers", 0)
+            end
+
             methods[key] = value
         end
     end

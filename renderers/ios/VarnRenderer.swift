@@ -13,11 +13,15 @@ public final class VarnRenderer {
     private var nodes: [Int: Node] = [:]
     private var measurements = NSCache<NSString, NSValue>()
 
+    /// Where the application was asked to be, which a link the reader followed arrives as.
+    public var address: String = "/"
+
     public let capabilities: [String: Bool] = [
         "text": true, "image": true, "list": true, "scroll": true, "input": true,
         "video": true, "webview": true, "canvas": true,
         "picker": true, "datepicker": true,
-        "haptics": true, "safearea": true, "audio": true, "map": true, "location": true, "gradient": true, "blur": true,
+        "haptics": true, "safearea": true, "audio": true, "map": true, "location": true, "gradient": true, "nineSlice": true, "blur": true, "systemBars": true,
+        "camera": true, "microphone": true,
     ]
 
     public init(surface: UIView, emit: @escaping EventSink) {
@@ -169,6 +173,15 @@ public final class VarnRenderer {
             throw RendererError.malformed("a placement carried no parent or index")
         }
 
+        // A layer is drawn over the whole application rather than where it was written, and the engine
+        // lays it out against the surface, so the surface is what it hangs from. A box that clips what it
+        // holds, or one a transition is moving, would each take an overlay written inside it with them.
+        if node.type == "layer" {
+            node.view.removeFromSuperview()
+            surface.addSubview(node.view)
+            return
+        }
+
         let container = parent == 0 ? surface : try expect(parent).view
         let target = VarnViewFactory.contentView(of: container)
 
@@ -176,6 +189,10 @@ public final class VarnRenderer {
 
         let position = min(max(index - 1, 0), target.subviews.count)
         target.insertSubview(node.view, at: position)
+
+        // What the tree holds against an edge is drawn over what it covers, and a row realised while the
+        // surface scrolls arrives above it in the order the tree puts it in.
+        (container as? VarnCollectionView)?.hold()
     }
 
     private func remove(_ id: Int?) {
@@ -183,6 +200,7 @@ public final class VarnRenderer {
             return
         }
 
+        (node.view as? VarnReleasing)?.letGo()
         node.view.removeFromSuperview()
         nodes.removeValue(forKey: id)
     }
@@ -285,15 +303,8 @@ public final class VarnRenderer {
     /// A number written into the tree is a number that was true of one platform on one day: a switch was
     /// 51 across until it was 61, and a frame worked out from the old one spills the control out of the
     /// box it was given.
-    /// A variant names which of a control the tree asked for, since a wheel and a compact date are two
-    /// different controls to lay out and only one of them is what the factory makes by default.
-    public func measureControl(_ type: String, variant: String?) -> [String: CGFloat] {
+    public func measureControl(_ type: String) -> [String: CGFloat] {
         let control = VarnViewFactory.make(type: type)
-
-        if variant == "wheel", let picker = control as? UIDatePicker {
-            picker.preferredDatePickerStyle = .wheels
-        }
-
         var size = control.intrinsicContentSize
 
         // A control answering `noIntrinsicMetric` for an axis is the platform saying it has no opinion
@@ -332,6 +343,25 @@ public final class VarnRenderer {
         return try VarnActions.perform(method, on: node.view, arguments: arguments)
     }
 
+    /// Paints what the platform draws around the surface, which is everything the tree is not.
+    ///
+    /// A window shows its own ground wherever the surface does not cover it — behind a sheet being
+    /// dismissed, under a rotation, past the end of a bouncing list — and UIKit writes the captions of
+    /// the controls it owns in a colour of its own. None of that is a node, so a dark application on a
+    /// white window with black words inside a date picker is what leaving it out looks like.
+    public func showTheme(_ ground: [String: Any]) {
+        let background = VarnStyle.color(ground["background"])
+
+        surface.backgroundColor = background
+        surface.window?.backgroundColor = background
+        surface.tintColor = VarnStyle.color(ground["primary"])
+
+        let appearance = ground["appearance"] as? String
+
+        surface.overrideUserInterfaceStyle = appearance == "dark" ? .dark : .light
+        surface.window?.overrideUserInterfaceStyle = surface.overrideUserInterfaceStyle
+    }
+
     /// Answers the surface the engine lays out inside, plus the insets the platform reports.
     public func surfaceDescription() -> [String: Any] {
         let insets = surface.safeAreaInsets
@@ -341,7 +371,9 @@ public final class VarnRenderer {
             "height": surface.bounds.height,
             "scale": UIScreen.main.scale,
             "platform": "ios",
+            "address": address,
             "appearance": surface.traitCollection.userInterfaceStyle == .dark ? "dark" : "light",
+            "state": VarnLifecycle.state(of: UIApplication.shared.applicationState),
             "safeArea": [
                 "top": insets.top,
                 "right": insets.right,
@@ -376,6 +408,15 @@ enum VarnValue {
         }
 
         return value as? CGFloat
+    }
+
+    /// Answers a list of numbers, which is how a colour matrix and a run of stops each arrive.
+    static func numbers(_ value: Any?) -> [Double]? {
+        guard let list = value as? [Any] else {
+            return nil
+        }
+
+        return list.compactMap { number($0).map(Double.init) }
     }
 
     /// The sentinel an update carries for a prop the new description no longer has.

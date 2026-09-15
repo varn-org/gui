@@ -19,7 +19,7 @@ enum VarnAudioSession {
 /// What draws a player is the tree, so this view is never seen. It is told whether it should be playing
 /// and where to be, and it reports where it has got to and how long the whole thing is.
 final class VarnAudioView: UIView {
-    private let player = AVPlayer()
+    private(set) var player = AVPlayer()
     private var watching: Any?
     private var ended: NSObjectProtocol?
     private var announced = false
@@ -27,6 +27,9 @@ final class VarnAudioView: UIView {
     var onProgress: (([String: Any]) -> Void)?
     var onReady: (([String: Any]) -> Void)?
     var onEnd: (() -> Void)?
+    var onError: (([String: Any]) -> Void)?
+
+    private var failure: NSKeyValueObservation?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -55,7 +58,20 @@ final class VarnAudioView: UIView {
         VarnAudioSession.playback()
 
         announced = false
-        player.replaceCurrentItem(with: AVPlayerItem(url: url))
+
+        let item = AVPlayerItem(url: url)
+
+        // A sound that cannot be opened at all leaves a play button that does nothing and says nothing.
+        failure = item.observe(\.status) { [weak self] observed, _ in
+            guard observed.status == .failed else {
+                return
+            }
+
+            let problem = observed.error?.localizedDescription ?? "the sound could not be opened"
+            DispatchQueue.main.async { self?.onError?(["message": problem]) }
+        }
+
+        player.replaceCurrentItem(with: item)
     }
 
     func setPlaying(_ value: Bool) {
@@ -83,15 +99,22 @@ final class VarnAudioView: UIView {
         }
     }
 
-    /// Moves to a moment, which is what a scrubber asks for and never what playing reports back.
-    func setPosition(_ seconds: Double) {
-        let wanted = CMTime(seconds: seconds, preferredTimescale: 600)
+    /// Moves to a moment, which is a reader dragging a scrubber rather than anything the tree describes.
+    func seek(to seconds: Double) {
+        let whole = player.currentItem?.duration.seconds ?? 0
+        let bound = whole.isFinite ? whole : seconds
+        let wanted = CMTime(seconds: max(0, min(seconds, bound)), preferredTimescale: 600)
 
-        guard abs(player.currentTime().seconds - seconds) > 0.25 else {
-            return
+        // The completion is not promised on any particular queue, and what it does reaches the tree.
+        player.seek(to: wanted, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self else {
+                    return
+                }
+
+                self.report(at: self.player.currentTime().seconds)
+            }
         }
-
-        player.seek(to: wanted, toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
     private var loops = false
@@ -104,12 +127,14 @@ final class VarnAudioView: UIView {
             self?.report(at: time.seconds)
         }
 
+        // The notice names the item that finished, and every item in the process raises the same one, so
+        // a screen holding two sounds tells both of them that one of them ended.
         ended = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            guard let self else {
+        ) { [weak self] note in
+            guard let self, note.object as AnyObject? === self.player.currentItem else {
                 return
             }
 

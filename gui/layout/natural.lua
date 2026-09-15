@@ -10,14 +10,14 @@ local declared = {}
 --- given. A type that stands this in for its size is measured rather than assumed.
 M.platform = setmetatable({}, { __tostring = function() return "platform" end })
 
---- The same, for a control the platform draws more than one way, which the variant names.
+--- The height a control is worth is the platform's and its width is the row's, which several controls are.
 ---
---- A wheel picker and a compact one are different controls to lay out, and the size of either is the
---- platform's to answer. Asking about the type alone gets the answer for whichever one it makes by
---- default, so a wheel was given a height written here and stretched to whatever width was going.
-function M.variant(name)
-    return setmetatable({ variant = name }, { __tostring = function() return "platform/" .. name end })
-end
+--- A slider and a segmented control run the width they are given on every platform, and each of them
+--- answers a width of its own when it is asked for one with nothing in it — the browser says a slider is
+--- 129 across, UIKit says about 150 and Android says something else again, so the same screen came out a
+--- different width on each of the three. Which axes a platform decides is the declaration's to say, since
+--- a renderer answering it is three renderers disagreeing about it.
+M.platformHeight = setmetatable({}, { __tostring = function() return "platform height" end })
 
 --- Records the natural size of a type, which is what a component declares once and every screen reads.
 ---
@@ -51,6 +51,18 @@ function M.textOf(kind, props)
     return value ~= nil and tostring(value) or nil
 end
 
+--- Answers a least extent, which a type whose smallest size depends on how it was asked for computes.
+---
+--- A frame drawn from a picture cut into nine cannot be narrower than the two corners it is cut at, and
+--- what those are is written on the node rather than fixed for the type.
+local function least(declared, props)
+    if type(declared) == "function" then
+        return declared(props)
+    end
+
+    return declared
+end
+
 --- Answers the size a node takes when nothing else constrains it, and the padding around its text.
 function M.sizeOf(kind, props, measureControl)
     local natural = declared[kind]
@@ -67,10 +79,14 @@ function M.sizeOf(kind, props, measureControl)
 
     -- A type whose size depends on how it was asked for answers the sentinel from its own function, so
     -- what the platform draws is asked for after the type has had its say rather than before.
-    if size == M.platform then
-        size = measureControl ~= nil and measureControl(kind) or nil
-    elseif type(size) == "table" and size.variant ~= nil then
-        size = measureControl ~= nil and measureControl(kind, size.variant) or nil
+    if size == M.platform or size == M.platformHeight then
+        local measured = measureControl ~= nil and measureControl(kind) or nil
+
+        if measured ~= nil and size == M.platformHeight then
+            measured = { height = measured.height }
+        end
+
+        size = measured
     end
 
     if size == nil and natural.padding == nil and natural.minWidth == nil and natural.minHeight == nil then
@@ -80,8 +96,8 @@ function M.sizeOf(kind, props, measureControl)
     return {
         width = size ~= nil and size.width or nil,
         height = size ~= nil and size.height or nil,
-        minWidth = natural.minWidth,
-        minHeight = natural.minHeight,
+        minWidth = least(natural.minWidth, props),
+        minHeight = least(natural.minHeight, props),
         padding = natural.padding,
     }
 end

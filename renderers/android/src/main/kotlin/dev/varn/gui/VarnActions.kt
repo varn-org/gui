@@ -2,7 +2,6 @@ package dev.varn.gui
 
 import android.view.View
 import android.view.inputmethod.InputMethodManager
-import android.widget.VideoView
 import org.json.JSONObject
 
 /** Performs the imperative action a ref asked for, refusing a name the renderer has no answer for. */
@@ -34,10 +33,53 @@ object VarnActions {
             true
         }
 
+        "capturePhoto", "startRecording", "stopRecording" -> {
+            val camera = view as? VarnCameraView ?: throw VarnRendererException("$method needs a camera")
+
+            when (method) {
+                "capturePhoto" -> camera.capturePhoto()
+                "startRecording" -> camera.startRecording()
+                else -> camera.stopRecording()
+            }
+
+            true
+        }
+
         "play", "pause" -> {
-            val video = view as? VideoView ?: throw VarnRendererException("$method needs a video")
+            val video = view as? VarnVideoView ?: throw VarnRendererException("$method needs a video")
 
             if (method == "play") video.start() else video.pause()
+            true
+        }
+
+        "seek" -> {
+            if (!arguments.has("seconds")) {
+                throw VarnRendererException("seek is asked for a number of seconds")
+            }
+
+            val seconds = arguments.optDouble("seconds", 0.0)
+
+            when (view) {
+                is VarnAudioView -> view.seek(seconds)
+                is VarnVideoView -> view.seekTo((seconds * 1000).toInt())
+                else -> throw VarnRendererException("seek needs a sound or a film")
+            }
+
+            true
+        }
+
+        "toggleMark", "setLink", "clearLink", "copy", "cut", "paste", "selectAll" -> {
+            val editor = view as? VarnRichEditor ?: throw VarnRendererException("$method needs an editor")
+
+            editor.requestFocus()
+
+            when (method) {
+                "toggleMark" -> editor.toggle(arguments.optString("mark"))
+                "setLink" -> editor.link(arguments.optString("url"))
+                "clearLink" -> editor.link(null)
+                else -> editor.clipboard(method)
+            }
+
             true
         }
 

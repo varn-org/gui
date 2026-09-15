@@ -13,8 +13,16 @@ M.context = context.create(true)
 M.Showing = M.context.Provider
 
 --- Answers whether a component is on screen, which is what its callbacks are fired from.
+---
+--- Asking this way is asking to be rendered again when the answer changes, which is what a component
+--- with a visibility callback needs: nothing else would bring the diff back to it to fire the moment.
 function M.of(instance)
     return M.context:read(instance) ~= false
+end
+
+--- Answers whether a component is on screen without asking to be rendered when that changes.
+function M.showing(instance)
+    return M.context:peek(instance) ~= false
 end
 
 return M

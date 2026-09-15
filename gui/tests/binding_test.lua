@@ -1,4 +1,5 @@
 local gui = require("gui")
+local resolve = require("gui.style.resolve")
 
 local function start(description, options)
     local renderer = gui.headless()
@@ -25,8 +26,8 @@ end
 --
 -- A ref is held across time — a timer that scrolls a list, a handler that focuses a field once an
 -- answer comes back — and by then the screen may have gone. That is life rather than a mistake, so the
--- call answers whether there was anything to call, and raising instead left a screen that had been left
--- reporting a failure from inside the bridge.
+-- call answers whether there was anything to call. Raising instead turns an ordinary race into a
+-- failure reported from inside the bridge.
 do
     local empty = gui.ref()
     local ok, answered = pcall(empty.call, empty, "focus", {})
@@ -131,7 +132,7 @@ do
     local frame = renderer:find("view").frame
     assert(frame ~= nil, "the node must have been laid out")
 
-    local resolved = gui.resolveStyle({ padding = "md", background = "primary" }, theme, "compact")
+    local resolved = resolve.resolve({ padding = "md", background = "primary" }, theme, "compact")
     assert(resolved.padding == theme.spacing.md, "a spacing name must become a number")
     assert(resolved.background == gui.color.toHex(theme.colors.primary),
         "a colour name must become the hex every renderer draws with")
@@ -139,9 +140,9 @@ end
 
 -- Every colour reaches a renderer as eight digit hex, whatever shape it was written in.
 --
--- The iOS and Android parsers read nothing that does not start with a hash, so the theme's `overlay`,
--- written as an `rgba` call, drew as nothing at all: the scrim behind every overlay was invisible and an
--- alert read as the page it was covering. A renderer reads a colour rather than parsing one.
+-- The iOS and Android parsers read nothing that does not start with a hash, so a theme colour written
+-- as an `rgba` call reaches them as nothing at all: the scrim behind an overlay is invisible and an
+-- alert reads as the page it covers. A renderer reads a colour rather than parsing one.
 do
     local theme = gui.theme.create()
 
@@ -151,12 +152,16 @@ do
         { given = "#fff", expected = "#ffffffff" },
         { given = "#3b82f6", expected = "#3b82f6ff" },
         { given = "hsl(0, 100%, 50%)", expected = "#ff0000ff" },
-        { given = "red", expected = "#ff0000ff" },
+        -- The theme carries the classic families, so a name it knows is the theme's rather than the
+        -- browser's: `red` is the family's 500 and a pure red is written as one.
+        { given = "red", expected = "#f44336ff" },
+        { given = "indigo300", expected = "#7986cbff" },
+        { given = "#ff0000", expected = "#ff0000ff" },
     }
 
     for index = 1, #written do
         local entry = written[index]
-        local resolved = gui.resolveStyle({ background = entry.given }, theme, "compact")
+        local resolved = resolve.resolve({ background = entry.given }, theme, "compact")
 
         assert(resolved.background == entry.expected,
             entry.given .. " must resolve to " .. entry.expected .. ", got " .. tostring(resolved.background))
@@ -175,7 +180,7 @@ do
         "a tint written as a call must reach a renderer as hex, got " .. tostring(control.props.thumbColor))
 
     -- A shadow carries a colour of its own, which is the one an overlay is separated from the page by.
-    local shadow = gui.resolveStyle({ shadow = "md" }, theme, "compact").shadow
+    local shadow = resolve.resolve({ shadow = "md" }, theme, "compact").shadow
     assert(shadow.color:match("^#%x%x%x%x%x%x%x%x$") ~= nil,
         "a shadow's colour must reach a renderer as hex, got " .. tostring(shadow.color))
 end
@@ -186,7 +191,7 @@ do
     local base = { padding = 4, background = "#ffffff" }
     local accent = { background = "#ff0000" }
 
-    local resolved = gui.resolveStyle({ base, accent }, theme, "compact")
+    local resolved = resolve.resolve({ base, accent }, theme, "compact")
     assert(resolved.padding == 4, "an untouched value must survive")
     assert(resolved.background == "#ff0000ff", "the later style must win")
 end
@@ -194,7 +199,7 @@ end
 -- A false entry in a style list is skipped, which is what a conditional style is.
 do
     local theme = gui.theme.create()
-    local resolved = gui.resolveStyle({ { padding = 4 }, false, { margin = 2 } }, theme, "compact")
+    local resolved = resolve.resolve({ { padding = 4 }, false, { margin = 2 } }, theme, "compact")
 
     assert(resolved.padding == 4 and resolved.margin == 2, "a false entry must be skipped")
 end
@@ -203,8 +208,8 @@ end
 do
     local theme = gui.theme.create()
 
-    local compact = gui.resolveStyle({ padding = { compact = 8, expanded = 32 } }, theme, "compact")
-    local expanded = gui.resolveStyle({ padding = { compact = 8, expanded = 32 } }, theme, "expanded")
+    local compact = resolve.resolve({ padding = { compact = 8, expanded = 32 } }, theme, "compact")
+    local expanded = resolve.resolve({ padding = { compact = 8, expanded = 32 } }, theme, "expanded")
 
     assert(compact.padding == 8, "a phone must take the compact value")
     assert(expanded.padding == 32, "a desktop must take the expanded value")
@@ -289,11 +294,17 @@ do
     assert(ok, "a host that has said where may be asked")
     assert(problem ~= nil and problem:sub(1, 1) == "/", "and it answers a place, answered " .. tostring(problem))
 
-    local refused, named = pcall(storage.directory, "a/path")
+    -- A name of dots alone carries no separator and still points somewhere else, which is the whole of
+    -- what being told where to write is worth.
+    local elsewhere = { "a/path", "a\\path", "..", ".", "" }
 
-    assert(not refused, "a directory is named rather than pathed")
-    assert(tostring(named):find("named, not pathed", 1, true) ~= nil,
-        "and it says so, said " .. tostring(named))
+    for index = 1, #elsewhere do
+        local refused, named = pcall(storage.directory, elsewhere[index])
+
+        assert(not refused, "a directory is named rather than pathed, and " .. elsewhere[index] .. " is a path")
+        assert(tostring(named):find("named, not pathed", 1, true) ~= nil,
+            "and it says so, said " .. tostring(named))
+    end
 end
 
 do

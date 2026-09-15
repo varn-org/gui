@@ -3,7 +3,7 @@ local parts = require("parts")
 
 local Dialogs = gui.component({
     name = "DialogsDemo",
-    state = { modal = false, sheet = false, alert = false, actions = false, toast = false },
+    state = { modal = false, sheet = false, alert = false, actions = false, toast = false, note = false },
 
     render = function(self)
         local function show(field)
@@ -31,8 +31,22 @@ local Dialogs = gui.component({
                 parts.Block {
                     title = "Saying something",
                     gui.Button { title = "Show a toast", variant = "tinted", onPress = show("toast") },
+                    gui.Button { title = "Pin a note over everything", variant = "outlined", onPress = show("note") },
                 },
             },
+
+            -- Written inside the page and drawn over the whole application, bar and tabs included.
+            self.state.note and gui.Portal {
+                gui.Pressable {
+                    style = {
+                        position = "absolute", top = 16, left = 16, right = 16,
+                        padding = "md", radius = "md", background = "primary",
+                    },
+                    accessibilityLabel = "Dismiss the note",
+                    onPress = hide("note"),
+                    gui.Text { text = "Pinned over the application. Press to dismiss.", style = { color = "onPrimary" } },
+                },
+            } or false,
 
             gui.Modal { visible = self.state.modal, onDismiss = hide("modal"),
                 gui.View { style = { padding = "lg", gap = "md" },
@@ -80,7 +94,7 @@ local Dialogs = gui.component({
 
 local Menus = gui.component({
     name = "MenusDemo",
-    state = { menu = false, drawer = false, chosen = "nothing yet" },
+    state = { menu = false, drawer = false, side = "left", chosen = "nothing yet" },
 
     render = function(self)
         return gui.View { style = { grow = 1 },
@@ -94,9 +108,9 @@ local Menus = gui.component({
                 parts.Block {
                     title = "A drawer",
                     gui.Button { title = "Open the drawer", variant = "tinted",
-                        onPress = function() self:setState({ drawer = "left" }) end },
+                        onPress = function() self:setState({ drawer = true, side = "left" }) end },
                     gui.Button { title = "Open it from the other side", variant = "tinted",
-                        onPress = function() self:setState({ drawer = "right" }) end },
+                        onPress = function() self:setState({ drawer = true, side = "right" }) end },
                 },
             },
 
@@ -111,9 +125,12 @@ local Menus = gui.component({
                 onDismiss = function() self:setState({ menu = false }) end,
             },
 
+            -- The side outlives the open, since a drawer leaves the way it came and is still leaving
+            -- after it has been closed: told the other side while it goes, it slides out across the
+            -- screen it came from.
             gui.Drawer {
-                open = self.state.drawer ~= false,
-                side = self.state.drawer ~= false and self.state.drawer or "left",
+                open = self.state.drawer,
+                side = self.state.side,
                 width = 260,
                 onClose = function() self:setState({ drawer = false }) end,
                 content = gui.View { style = { padding = "lg", gap = "sm" },
@@ -184,7 +201,54 @@ local Grouping = gui.component({
     end,
 })
 
+--- The shape every screen is built into, drawn by the library rather than by hand on each one.
+local Shape = gui.component({
+    name = "ShapeDemo",
+    state = { added = 0, tab = 1 },
+
+    render = function(self)
+        return gui.Scaffold {
+            bar = gui.AppBar {
+                title = "Inbox",
+                subtitle = self.state.added == 0 and "Nothing added yet" or (self.state.added .. " added"),
+                leading = {
+                    { key = "menu", icon = "menu", accessibilityLabel = "Menu",
+                        onPress = function() self:setState({ added = 0 }) end },
+                },
+                trailing = {
+                    { key = "search", icon = "search", accessibilityLabel = "Search",
+                        onPress = function() self:setState({ added = self.state.added + 1 }) end },
+                },
+            },
+
+            bottom = gui.TabBar {
+                tabs = {
+                    { key = "all", label = "All", icon = "home" },
+                    { key = "unread", label = "Unread", icon = "bell" },
+                },
+                selectedIndex = self.state.tab,
+                onChange = function(index) self:setState({ tab = index }) end,
+            },
+
+            floating = gui.Button {
+                title = "+",
+                onPress = function() self:setState({ added = self.state.added + 1 }) end,
+                style = { width = 56, height = 56, radius = "pill" },
+            },
+
+            gui.View { style = { padding = "md", gap = "sm" },
+                gui.Text {
+                    text = "The bar, the screen, the bar along the bottom and what floats over all of it.",
+                    style = { color = "textMuted" },
+                },
+                gui.Text { text = "Added " .. self.state.added .. " so far", style = { fontWeight = "600" } },
+            },
+        }
+    end,
+})
+
 return {
+    { key = "shape", title = "A bar and a shape", summary = "The arrangement every screen is built into", render = function() return Shape {} end },
     { key = "dialogs", title = "Modals, sheets and alerts", summary = "Everything shown over the screen", render = function() return Dialogs {} end },
     { key = "menus", title = "Menus and drawers", summary = "Chosen from, or slid in from a side", render = function() return Menus {} end },
     { key = "grouping", title = "Accordion, tabs and a stack", summary = "Ways of holding several screens", render = function() return Grouping {} end },

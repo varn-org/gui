@@ -62,7 +62,11 @@ The realised set stays bounded however long the data is. A list of fifty thousan
 
 ## Sections, grids and carousels
 
-`SectionList` groups entries under headers that may stick. `Grid` lays them in a fixed or adaptive column count. `Carousel` pages them. All three carry the same item type, reuse and extent fields, because they are the same machinery with a different arrangement.
+`SectionList` groups entries under headers that may stick. `Grid` lays them in a fixed column count, written as `columns`, or in as many columns of a `minColumnWidth` as the width allows, which is two when it is told neither and never both at once. `Carousel` pages them. All three carry the same item type, reuse and extent fields, because they are the same machinery with a different arrangement.
+
+A size any of them divides by is refused where it is written: an extent, a column count and an autoplay interval are all greater than nought, since nought columns is a frame that never comes back and an entry of no height is every entry at the same offset.
+
+Every section of a `SectionList` carries a header, so `renderHeader` is asked for alongside `renderItem`, each section is a table carrying its own `data`, and a section with a `footer` is given a `renderFooter` to draw it. A list missing any of them is refused where it is written rather than failing on the first section it reaches, inside the window.
 
 ## A header that sticks
 

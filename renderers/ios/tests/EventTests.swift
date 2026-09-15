@@ -137,6 +137,139 @@ final class EventTests: XCTestCase {
         try renderer.apply([["op": "update", "id": 1, "props": ["value": ""]]])
         XCTAssertEqual(field.text, "", "and a value the tree really did change is applied")
     }
+    /// Where the caret went is reported through the one moment the platform publishes for it.
+    ///
+    /// A field's `selectedTextRange` is set by UIKit without going through anything a subclass can
+    /// observe, so a handler hung on the property is one that never fires — which is a promise in the
+    /// reference that nothing keeps.
+    func testMovingTheCaretInAFieldIsReported() throws {
+        let field = try XCTUnwrap(build("textinput", ["onSelectionChange": true]) as? VarnTextField)
+
+        field.text = "Ada Lovelace"
+        field.selectedTextRange = field.textRange(
+            from: try XCTUnwrap(field.position(from: field.beginningOfDocument, offset: 4)),
+            to: try XCTUnwrap(field.position(from: field.beginningOfDocument, offset: 12))
+        )
+
+        let told = reported.filter { $0.1 == "onSelectionChange" }
+
+        // The platform calls the delegate itself when the range is set, which is the whole point of
+        // reporting through it: a handler hung on the property would never have been reached at all.
+        XCTAssertFalse(told.isEmpty, "moving the caret must be reported")
+
+        let where_ = try XCTUnwrap(told.last?.2 as? [String: Any])
+
+        XCTAssertEqual(where_["start"] as? Int, 4, "carrying where the selection starts")
+        XCTAssertEqual(where_["end"] as? Int, 12, "and where it ends")
+    }
+
+    /// A box listening for a key takes the keyboard, since that is what a key is delivered through.
+    func testABoxListeningForAKeyCanTakeTheKeyboard() throws {
+        let plain = try XCTUnwrap(build("pressable", ["onPress": true]) as? VarnPressableView)
+
+        XCTAssertFalse(plain.canBecomeFirstResponder, "a box nobody is listening to takes no keyboard")
+
+        try renderer.apply([
+            ["op": "create", "id": 2, "type": "pressable", "props": ["onKeyDown": true]],
+            ["op": "insert", "id": 2, "parent": 0, "index": 2],
+        ])
+
+        let listening = try XCTUnwrap(surface.subviews.last as? VarnPressableView)
+
+        XCTAssertTrue(listening.canBecomeFirstResponder, "and one that is can be reached by a key")
+    }
+
+    /// A double press is the platform's own gesture rather than two presses counted here.
+    func testADoublePressIsItsOwnGesture() throws {
+        let box = try build("pressable", ["onDoublePress": true])
+
+        let twice = box.gestureRecognizers?.compactMap { $0 as? UITapGestureRecognizer }
+            .first { $0.numberOfTapsRequired == 2 }
+
+        XCTAssertNotNil(twice, "a box listening for a double press carries the gesture for one")
+    }
+
+    /// An editor draws its marks once the whole batch is in, since a style in it decides the face.
+    ///
+    /// Writing a font onto a text view replaces the font of every run it holds, and the props of one
+    /// batch arrive in no order: the same document came out in one weight or in two depending on which
+    /// of the two happened to be applied last.
+    func testAnEditorDrawsItsMarksWhateverOrderTheBatchArrivesIn() throws {
+        let document: [[String: Any]] = [
+            ["text": "plain ", "marks": [String: Any]()],
+            ["text": "heavy", "marks": ["bold": true]],
+        ]
+
+        try renderer.apply([
+            ["op": "create", "id": 3, "type": "richeditor", "props": [
+                "value": document,
+                "style": ["fontSize": 20],
+            ]],
+            ["op": "insert", "id": 3, "parent": 0, "index": 1],
+            ["op": "frame", "id": 3, "x": 0, "y": 0, "width": 390, "height": 200],
+        ])
+
+        let editor = try XCTUnwrap(surface.subviews.compactMap { $0 as? VarnRichEditor }.first)
+        let whole = try XCTUnwrap(editor.attributedText)
+
+        XCTAssertEqual(whole.string, "plain heavy", "the editor holds the document it was given")
+
+        let heavy = whole.attribute(.font, at: 7, effectiveRange: nil) as? UIFont
+        let plain = whole.attribute(.font, at: 1, effectiveRange: nil) as? UIFont
+
+        XCTAssertEqual(heavy?.fontDescriptor.symbolicTraits.contains(.traitBold), true,
+                       "a run marked bold is drawn in the platform's own bold")
+        XCTAssertEqual(plain?.fontDescriptor.symbolicTraits.contains(.traitBold), false,
+                       "and one that is not is not")
+        XCTAssertEqual(heavy?.pointSize, 20, "both at the size the style asked for")
+    }
+
+    /// What the editor reports is the document, read back out of what the platform is holding.
+    func testAnEditorReportsTheDocumentItHolds() throws {
+        try renderer.apply([
+            ["op": "create", "id": 4, "type": "richeditor", "props": [
+                "value": [["text": "one", "marks": ["italic": true]]],
+                "onChange": true,
+            ]],
+            ["op": "insert", "id": 4, "parent": 0, "index": 1],
+            ["op": "frame", "id": 4, "x": 0, "y": 0, "width": 390, "height": 200],
+        ])
+
+        let editor = try XCTUnwrap(surface.subviews.compactMap { $0 as? VarnRichEditor }.first)
+        let runs = editor.document()
+
+        XCTAssertEqual(runs.count, 1, "one run went in and one came back")
+        XCTAssertEqual(runs.first?["text"] as? String, "one", "carrying what was written")
+
+        let marks = try XCTUnwrap(runs.first?["marks"] as? [String: Any])
+
+        XCTAssertEqual(marks["italic"] as? Bool, true, "and the mark it was given")
+    }
+
+    /// A mark applied to a selection changes the document rather than a copy of it.
+    func testTogglingAMarkOverASelectionChangesTheDocument() throws {
+        try renderer.apply([
+            ["op": "create", "id": 5, "type": "richeditor", "props": [
+                "value": [["text": "one two", "marks": [String: Any]()]],
+                "onChange": true,
+            ]],
+            ["op": "insert", "id": 5, "parent": 0, "index": 1],
+            ["op": "frame", "id": 5, "x": 0, "y": 0, "width": 390, "height": 200],
+        ])
+
+        let editor = try XCTUnwrap(surface.subviews.compactMap { $0 as? VarnRichEditor }.first)
+
+        editor.selectedRange = NSRange(location: 0, length: 3)
+        _ = try renderer.invoke(id: 5, method: "toggleMark", arguments: ["mark": "bold"])
+
+        let runs = editor.document()
+
+        XCTAssertEqual(runs.count, 2, "the selection is a run of its own now, got \(runs.count)")
+        XCTAssertEqual((runs.first?["marks"] as? [String: Any])?["bold"] as? Bool, true,
+                       "and it carries the mark")
+        XCTAssertNil((runs.last?["marks"] as? [String: Any])?["bold"], "while the rest does not")
+    }
+
 }
 
 /// A recogniser standing in a state of its own, since a real one only ever reports what a finger did.
@@ -152,4 +285,5 @@ private final class FakeRecognizer: UIGestureRecognizer {
         get { held }
         set { _ = newValue }
     }
+
 }

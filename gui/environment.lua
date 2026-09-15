@@ -6,9 +6,15 @@ local context = require("gui.context")
 --- chevron and a title on one and an arrow on the other — and that is the one thing a tree cannot work
 --- out for itself. Everything else stays free of it: layout, styling and behaviour are the same
 --- wherever they run, and a component that reads this to decide a colour or a size is doing it wrong.
+---
+--- `state` is whether the application is in front and taking input, in front and not, or out of sight. A
+--- screen that draws differently while it is away reads it here, and one that has work to do at those
+--- moments takes `onPause` and `onResume` instead.
 return context.create({
     platform = "web",
+    address = "/",
     appearance = "light",
+    state = "active",
     scale = 1,
     width = 0,
     height = 0,

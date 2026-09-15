@@ -12,7 +12,7 @@ local function chart(values, width, height)
 
         commands[#commands + 1] = {
             op = "fill",
-            color = "#3b6cff",
+            color = "primary",
             path = {
                 { left, height - bar },
                 { left + step - 8, height - bar },
@@ -36,9 +36,9 @@ local Drawing = gui.component({
                 gui.Canvas {
                     style = { height = 160, background = "surface", radius = "md" },
                     commands = {
-                        { op = "fill", color = "#3b82f6", path = { { 16, 16 }, { 96, 16 }, { 96, 96 }, { 16, 96 } } },
-                        { op = "stroke", color = "#16a34a", width = 4, path = { { 120, 96 }, { 160, 24 }, { 200, 96 } } },
-                        { op = "text", text = "drawn in Lua", x = 220, y = 60, color = "#111114", size = 16 },
+                        { op = "fill", color = "primary", path = { { 16, 16 }, { 96, 16 }, { 96, 96 }, { 16, 96 } } },
+                        { op = "stroke", color = "success", width = 4, path = { { 120, 96 }, { 160, 24 }, { 200, 96 } } },
+                        { op = "text", text = "drawn in Lua", x = 220, y = 60, color = "text", size = 16 },
                     },
                 },
             },

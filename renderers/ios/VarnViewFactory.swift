@@ -7,7 +7,7 @@ enum VarnViewFactory {
     static func make(type: String) -> UIView {
         switch type {
         case "text", "richtext": return VarnLabel()
-        case "image": return UIImageView()
+        case "image": return VarnPictureView()
         case "button": return VarnButton()
         case "pressable": return VarnPressableView()
         case "textinput", "searchbar": return VarnTextField()
@@ -18,15 +18,19 @@ enum VarnViewFactory {
         case "scroll", "list", "sectionlist", "grid", "carousel": return VarnCollectionView()
         case "switch": return VarnSwitch()
         case "slider": return VarnSlider()
-        case "stepper": return UIStepper()
+        case "stepper": return VarnStepper()
         case "segmented": return UISegmentedControl()
         case "progress": return UIProgressView()
-        case "activity": return UIActivityIndicatorView(style: .medium)
+        case "activity": return VarnActivityView()
         case "video": return VarnVideoView()
+        case "camera": return VarnCameraView()
+        case "recorder": return VarnRecorderView()
         case "audio": return VarnAudioView()
-        case "webview": return WKWebView()
+        case "webview": return VarnWebView()
         case "canvas": return VarnCanvasView()
         case "gradient": return VarnGradientView()
+        case "nineslice": return VarnNineSliceView()
+        case "richeditor": return VarnRichEditor()
         case "blur": return VarnBlurView()
         case "map": return VarnMapView()
         case "location": return VarnLocationView()
@@ -208,6 +212,37 @@ enum VarnHit {
     }
 }
 
+/// A picture, drawn from what it was loaded with rather than from what was last written over it.
+///
+/// A tint and a filter each rewrite the picture they are given, and the props of one batch arrive in no
+/// order at all, so applying one and then the other lost whichever came first: a tinted icon that was
+/// also filtered came out as one or the other depending on the order of a table. What was loaded, what
+/// tints it and what filters it are kept apart, and the picture is drawn from all three. A tint replaces
+/// the colours of a picture outright, so a picture that carries one leaves a filter nothing to change.
+final class VarnPictureView: UIImageView {
+    var source: UIImage? {
+        didSet { redraw() }
+    }
+
+    var tint: UIColor? {
+        didSet { redraw() }
+    }
+
+    var filter: [Double]? {
+        didSet { redraw() }
+    }
+
+    private func redraw() {
+        guard let tint else {
+            image = VarnFilter.apply(filter, to: source)?.withRenderingMode(.alwaysOriginal)
+            return
+        }
+
+        tintColor = tint
+        image = source?.withRenderingMode(.alwaysTemplate)
+    }
+}
+
 /// A box that shows one line of text, which is what a badge and a tooltip each are.
 ///
 /// The engine sizes it, so the label simply fills it and is centred inside.
@@ -237,6 +272,62 @@ final class VarnLabelView: UIView {
 }
 
 final class VarnContentView: UIView {}
+
+/// A web view that honours whether the tree allows the page it shows to run scripts.
+///
+/// A `WKWebView` answers a copy of the configuration it was built with, so writing a preference on it
+/// afterwards changes nothing at all: a tree that said no to scripts was shown a page that ran them.
+/// The decision belongs to the navigation, which is where a browser puts it too, and it is read when
+/// the load actually begins rather than in whatever order the props of one batch arrive.
+final class VarnWebView: WKWebView, WKNavigationDelegate {
+    var scripting = true
+
+    /// Told at each end of a load, and told rather than left silent when one cannot be made at all.
+    var onWillLoad: (([String: Any]) -> Void)?
+    var onLoad: (([String: Any]) -> Void)?
+    var onError: (([String: Any]) -> Void)?
+
+    override init(frame: CGRect, configuration: WKWebViewConfiguration) {
+        super.init(frame: frame, configuration: configuration)
+        navigationDelegate = self
+    }
+
+    convenience init() {
+        self.init(frame: .zero, configuration: WKWebViewConfiguration())
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("a web view is built by the factory rather than from a nib")
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        preferences: WKWebpagePreferences,
+        decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void
+    ) {
+        preferences.allowsContentJavaScript = scripting
+        decisionHandler(.allow, preferences)
+    }
+
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        onWillLoad?(["url": webView.url?.absoluteString ?? ""])
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        onLoad?(["url": webView.url?.absoluteString ?? ""])
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        onError?(["message": error.localizedDescription])
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
+                 withError error: Error) {
+        onError?(["message": error.localizedDescription])
+    }
+}
 
 /// A box that shows a mark and a label, which is what a checkbox and a radio each are.
 final class VarnCheckView: UIControl {
@@ -493,6 +584,16 @@ final class VarnDatePicker: UIDatePicker {
 /// platform's own answer to being pressed, since a control that does not react to a finger reads as
 /// one that is not listening.
 final class VarnButton: UIButton {
+    /// The room the title keeps inside the button, which the engine has already worked into the frame.
+    ///
+    /// The padding is part of the frame the engine sends, and the platform centres the title in that, so
+    /// an even padding needs nothing done to it. What is left is a padding that is not even, which moves
+    /// the title by the difference. `contentEdgeInsets` did it and is deprecated, and so are the two
+    /// rects that replaced it — the compiler said so on every build, which is a defect found for free.
+    var insets: UIEdgeInsets = .zero {
+        didSet { setNeedsLayout() }
+    }
+
     init() {
         super.init(frame: .zero)
         configuration = nil
@@ -500,6 +601,20 @@ final class VarnButton: UIButton {
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+
+        let across = (insets.left - insets.right) / 2
+        let down = (insets.top - insets.bottom) / 2
+
+        guard across != 0 || down != 0 else {
+            return
+        }
+
+        titleLabel?.frame = (titleLabel?.frame ?? .zero).offsetBy(dx: across, dy: down)
+        imageView?.frame = (imageView?.frame ?? .zero).offsetBy(dx: across, dy: down)
+    }
 
     override var isHighlighted: Bool {
         didSet { VarnPress.show(isHighlighted, on: self) }
@@ -510,9 +625,69 @@ final class VarnButton: UIButton {
 ///
 /// It is a control rather than a plain view so that a finger held on it is answered the way the
 /// platform answers one, and so the press is reported on release inside it rather than on any tap.
-final class VarnPressableView: UIControl {
+final class VarnPressableView: UIControl, VarnKeyed, VarnFocusing {
     /// How far past its own edge a finger still counts, which a small control needs to be hittable.
     var slop: CGFloat = 0
+
+    var onKey: ((String, [String: Any]) -> Void)?
+    var onFocusChange: ((Bool) -> Void)?
+    var wanted = false
+
+    /// Which axis this box claims a drag along, which the recogniser reads when it is attached.
+    var panAxis: String?
+
+    /// A box that is listening for a key takes the keyboard, which is what a key is delivered through.
+    override var canBecomeFirstResponder: Bool {
+        onKey != nil || wanted
+    }
+
+    override var canBecomeFocused: Bool {
+        wanted
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let took = super.becomeFirstResponder()
+
+        if took {
+            onFocusChange?(true)
+        }
+
+        return took
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let gave = super.resignFirstResponder()
+
+        if gave {
+            onFocusChange?(false)
+        }
+
+        return gave
+    }
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+
+        if context.nextFocusedView === self {
+            onFocusChange?(true)
+        }
+
+        if context.previouslyFocusedView === self {
+            onFocusChange?(false)
+        }
+    }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if !VarnKeys.report(presses, as: "onKeyDown", to: self) {
+            super.pressesBegan(presses, with: event)
+        }
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if !VarnKeys.report(presses, as: "onKeyUp", to: self) {
+            super.pressesEnded(presses, with: event)
+        }
+    }
 
     override var isHighlighted: Bool {
         didSet { VarnPress.show(isHighlighted, on: self) }
@@ -545,6 +720,32 @@ enum VarnPress {
 
 final class VarnSwitch: UISwitch {}
 
+/// A stepper that takes how far it may go, which the platform's own control will not be told piecemeal.
+///
+/// `UIStepper` raises rather than answers when a bound crosses the other or a step is not positive, and
+/// the props of one batch arrive in no order at all, so a minimum written before its maximum would take
+/// the process down. What it is worth and how far it goes are read together once the batch has landed,
+/// and a stepper nobody bounded goes as far in either direction as a number goes, which is what the
+/// other two platforms do with one.
+final class VarnStepper: UIStepper, VarnSettling {
+    var least: Double = -.greatestFiniteMagnitude
+    var most: Double = .greatestFiniteMagnitude
+    var by: Double = 1
+    var current: Double = 0
+
+    func settle() {
+        let low = min(least, most)
+        let high = max(least, most)
+
+        maximumValue = .greatestFiniteMagnitude
+        minimumValue = low
+        maximumValue = high
+
+        stepValue = by
+        value = min(high, max(low, current))
+    }
+}
+
 /// A slider that answers in the steps it was given rather than in every value between them.
 final class VarnSlider: UISlider {
     var step: CGFloat?
@@ -566,12 +767,46 @@ final class VarnSlider: UISlider {
 ///
 /// What may be typed into it is refused as it is typed. A tree that trimmed the text afterwards would
 /// put the caret back to the end and lose the keystroke that followed.
-final class VarnTextField: UITextField, UITextFieldDelegate {
+final class VarnTextField: UITextField, UITextFieldDelegate, VarnKeyed {
     var insets: UIEdgeInsets = .zero {
         didSet { setNeedsLayout() }
     }
 
     var limit: Int?
+
+    var onKey: ((String, [String: Any]) -> Void)?
+
+    /// Says where the caret is, which a browser and the two phones each report at a different moment.
+    var onSelection: (([String: Any]) -> Void)?
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if !VarnKeys.report(presses, as: "onKeyDown", to: self) {
+            super.pressesBegan(presses, with: event)
+        }
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if !VarnKeys.report(presses, as: "onKeyUp", to: self) {
+            super.pressesEnded(presses, with: event)
+        }
+    }
+
+    /// Says where the caret went, which the platform reports through the delegate and nowhere else.
+    ///
+    /// A field's `selectedTextRange` is set by UIKit without going through anything a subclass can
+    /// observe, so watching the property is a handler that never fires. This is the one moment the
+    /// platform publishes for it.
+    func textFieldDidChangeSelection(_ field: UITextField) {
+        guard let onSelection, let range = selectedTextRange else {
+            return
+        }
+
+        onSelection([
+            "start": offset(from: beginningOfDocument, to: range.start),
+            "end": offset(from: beginningOfDocument, to: range.end),
+            "marks": [String: Any](),
+        ])
+    }
 
     private var said: [String] = []
 
@@ -642,24 +877,90 @@ final class VarnTextField: UITextField, UITextFieldDelegate {
         bounds.inset(by: insets)
     }
 }
-final class VarnTextView: UITextView, UITextViewDelegate {
+final class VarnTextView: UITextView, UITextViewDelegate, VarnKeyed {
     var limit: Int?
     var onFocus: (() -> Void)?
     var onBlur: (() -> Void)?
     var onChange: ((String) -> Void)?
+    var onKey: ((String, [String: Any]) -> Void)?
+
+    /// Says where the caret is, which a browser and the two phones each report at a different moment.
+    var onSelection: (([String: Any]) -> Void)?
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if !VarnKeys.report(presses, as: "onKeyDown", to: self) {
+            super.pressesBegan(presses, with: event)
+        }
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if !VarnKeys.report(presses, as: "onKeyUp", to: self) {
+            super.pressesEnded(presses, with: event)
+        }
+    }
+
+    func textViewDidChangeSelection(_ text: UITextView) {
+        onSelection?([
+            "start": text.selectedRange.location,
+            "end": text.selectedRange.location + text.selectedRange.length,
+            "marks": [String: Any](),
+        ])
+    }
+
+    /// The words shown in an empty field, which `UITextView` has none of and every other field does.
+    ///
+    /// A one-line field is a `UITextField` and carries its own. A field over several lines is a text
+    /// view, which the platform gives no placeholder at all, so a field on a phone showed nothing where
+    /// the same tree on a page showed the words. It is drawn here, in the muted colour a placeholder is
+    /// drawn in, and goes as soon as there is anything to read.
+    private let hint = UILabel()
+
+    var placeholder: String? {
+        didSet {
+            hint.text = placeholder
+            showHint()
+        }
+    }
+
+    override var text: String! {
+        didSet { showHint() }
+    }
 
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
         delegate = self
+
+        hint.numberOfLines = 0
+        hint.textColor = .placeholderText
+        hint.isUserInteractionEnabled = false
+        addSubview(hint)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+
+        let inset = textContainerInset
+        let left = inset.left + textContainer.lineFragmentPadding
+        let width = bounds.width - left - inset.right - textContainer.lineFragmentPadding
+
+        hint.font = font
+        hint.frame = CGRect(x: left, y: inset.top, width: max(0, width), height: 0)
+        hint.sizeToFit()
+        hint.frame.origin = CGPoint(x: left, y: inset.top)
+    }
+
+    private func showHint() {
+        hint.isHidden = !(text ?? "").isEmpty
+    }
 
     func textView(_ text: UITextView, shouldChangeTextIn range: NSRange, replacementText: String) -> Bool {
         VarnLimit.allows(text.text, range, replacementText, limit)
     }
 
     func textViewDidChange(_ text: UITextView) {
+        showHint()
         onChange?(text.text ?? "")
     }
 
@@ -706,12 +1007,31 @@ final class VarnVideoView: UIView {
     var loops = false
     var autoplays = false
 
+    /// The colour matrix every frame is drawn through, which is what a look over a film is.
+    ///
+    /// A player draws its own frames, so nothing over the view can colour them: the look is applied where
+    /// the frames are composed instead, which is also the only place iOS lets one reach a video at all.
+    var filter: [Double]? {
+        didSet { compose() }
+    }
+
     var showsControls = true {
         didSet { controller.view.isHidden = !showsControls }
     }
 
     /// Called when the video reaches its end, unless it was told to start over instead.
     var onEnd: (() -> Void)?
+
+    /// Called when what it was given cannot be played at all, which is otherwise a black box.
+    var onError: (([String: Any]) -> Void)?
+
+    /// Called once the film can be played, carrying how long the whole of it runs for.
+    var onReady: (([String: Any]) -> Void)?
+
+    /// Called as it plays, carrying where it has got to, which is what a scrubber of the tree's follows.
+    var onProgress: (([String: Any]) -> Void)?
+
+    private var watching: Any?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -730,18 +1050,56 @@ final class VarnVideoView: UIView {
         poster.isUserInteractionEnabled = false
         addSubview(poster)
 
+        // The notice names the item that finished, and every item in the process raises the same one, so
+        // a screen holding a video and a sound tells both of them that one of them ended.
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(ended),
+            selector: #selector(ended(_:)),
             name: .AVPlayerItemDidPlayToEndTime,
             object: nil
         )
+
+        watching = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] time in
+            self?.report(at: time.seconds)
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+
+        if let watching {
+            player.removeTimeObserver(watching)
+        }
+    }
+
+    private func report(at position: Double) {
+        let whole = player.currentItem?.duration.seconds ?? 0
+        let duration = whole.isFinite ? whole : 0
+
+        onProgress?(["position": position, "duration": duration])
+    }
+
+    /// Moves to a moment, which is a reader dragging a scrubber rather than anything the tree describes.
+    func seek(to seconds: Double) {
+        let whole = player.currentItem?.duration.seconds ?? 0
+        let bound = whole.isFinite ? whole : seconds
+        let wanted = CMTime(seconds: max(0, min(seconds, bound)), preferredTimescale: 600)
+
+        // The completion is not promised on any particular queue, and what it does reaches the tree.
+        player.seek(to: wanted, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self else {
+                    return
+                }
+
+                self.report(at: self.player.currentTime().seconds)
+            }
+        }
     }
 
     /// Attaches the platform's own controls once there is a view controller to attach them to.
@@ -787,6 +1145,27 @@ final class VarnVideoView: UIView {
         poster.isHidden = poster.image == nil
     }
 
+    /// Draws every frame the player produces through the look the tree asked for.
+    private func compose() {
+        guard let item = player.currentItem else {
+            return
+        }
+
+        guard let matrix = filter else {
+            item.videoComposition = nil
+            return
+        }
+
+        item.videoComposition = AVVideoComposition(asset: item.asset) { request in
+            guard let drawn = VarnFilter.filtered(matrix, request.sourceImage) else {
+                request.finish(with: request.sourceImage, context: nil)
+                return
+            }
+
+            request.finish(with: drawn, context: nil)
+        }
+    }
+
     /// Takes a new source, starting it straight away when it was told to.
     ///
     /// The poster stands over the player until there is a frame behind it, which is what the first
@@ -794,31 +1173,49 @@ final class VarnVideoView: UIView {
     func play(_ item: AVPlayerItem) {
         VarnAudioSession.playback()
         player.replaceCurrentItem(with: item)
+        compose()
+
+        watchForFirstFrame(item)
 
         if autoplays {
             player.playImmediately(atRate: rate)
             poster.isHidden = true
-            return
         }
-
-        watchForFirstFrame(item)
     }
 
     private func watchForFirstFrame(_ item: AVPlayerItem) {
         readiness?.invalidate()
 
         readiness = item.observe(\.status) { [weak self] observed, _ in
+            if observed.status == .failed {
+                let problem = observed.error?.localizedDescription ?? "the film could not be opened"
+                DispatchQueue.main.async { self?.onError?(["message": problem]) }
+                return
+            }
+
             guard observed.status == .readyToPlay else {
                 return
             }
 
             DispatchQueue.main.async {
-                self?.poster.isHidden = true
+                guard let self else {
+                    return
+                }
+
+                self.poster.isHidden = true
+
+                let whole = observed.duration.seconds
+
+                self.onReady?(["duration": whole.isFinite ? whole : 0])
             }
         }
     }
 
-    @objc private func ended() {
+    @objc private func ended(_ note: Notification) {
+        guard note.object as AnyObject? === player.currentItem else {
+            return
+        }
+
         if loops {
             player.seek(to: .zero)
             player.playImmediately(atRate: rate)

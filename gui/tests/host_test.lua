@@ -39,6 +39,10 @@ local function platform(options)
             return true
         end,
 
+        gui_theme = function(ground)
+            recorder.ground = ground
+        end,
+
         gui_capabilities = function()
             return options.capabilities or { text = true, image = true, list = true, video = false }
         end,
@@ -187,6 +191,27 @@ async.run(function()
         assert(pressed == 1, "the event must reach the handler on that node")
     end
 
+    -- An event that fails while it is being handled is reported rather than raised at the host.
+    --
+    -- The engine calls a subscription from its own delivery, where a throw is written to the engine's
+    -- log and to nowhere a reader can see, and the screen stops answering with nothing said.
+    do
+        local recorder = platform()
+        local told = nil
+
+        bridge.run(gui.View { style = { grow = 1 } }, {
+            onProblem = function(problem) told = problem end,
+        })
+
+        host.gui_apply = function() error("the platform refused the batch", 0) end
+
+        local ok = pcall(recorder.handlers["gui.resize"], { width = 844, height = 390 })
+
+        assert(ok, "a failure while handling an event must not reach the host")
+        assert(told ~= nil and told:find("the platform refused the batch", 1, true) ~= nil,
+            "and it must be reported, got " .. tostring(told))
+    end
+
     -- A resize reaches the layout, which is what a rotation is.
     do
         local recorder = platform()
@@ -237,11 +262,21 @@ end
         })
 
         local recorder = platform()
-        local app = launch.run(archive, { cache = scratch .. "/cache" })
+        local app = launch.run(archive, { cache = scratch .. "/cache", framework = "." })
 
-        assert(#recorder.fonts == 1, "the fonts the manifest declares must be registered")
-        assert(recorder.fonts[1].family == "Gallery", "a font is registered under the family a style names")
-        assert(recorder.fonts[1].path:find("gallery.ttf", 1, true), "the font is registered from the expanded bundle")
+        -- The framework registers the faces it ships before a project's own, so a project naming the
+        -- same family replaces the face rather than being replaced by it.
+        local shipped = require("gui.assets.fonts")
+
+        assert(#recorder.fonts == #shipped + 1, "the framework's own faces are registered as well as the project's")
+        assert(recorder.fonts[1].family == "Roboto", "the framework's face comes first")
+        assert(recorder.fonts[1].path:find("gui/assets/fonts/", 1, true),
+            "and is registered from where the framework carries it")
+
+        local last = recorder.fonts[#recorder.fonts]
+
+        assert(last.family == "Gallery", "a font is registered under the family a style names")
+        assert(last.path:find("gallery.ttf", 1, true), "the font is registered from the expanded bundle")
 
         local created = operations(recorder, "create")
         local label = nil
@@ -298,6 +333,40 @@ end
 
         assert(gone, "and it is taken down when the host says it is finished")
         assert(not app:needsCommit(), "with nothing left to commit")
+    end
+
+    -- Everything the tree asks a host for is written down where somebody writing a fourth renderer reads.
+    --
+    -- The contract is the one document a port is built from, and it had fallen four functions behind what
+    -- the framework calls: a renderer written to it would have been missing them and found out at
+    -- runtime. The names are read out of the framework itself rather than remembered.
+    do
+        local fs = require("fs")
+        local contract = fs.readFile("docs/porting.md"):await()
+        local asked = {}
+
+        -- The hosts are read as well as the framework, since each writes the Lua it launches with and
+        -- calls into itself from there: `gui_problem` is asked for by a line inside that string and by
+        -- nothing under `gui/` at all, so reading the framework alone left it out of the contract.
+        local sources = {
+            "gui/files.lua",
+            "gui/host/bridge.lua",
+            "gui/host/launch.lua",
+            "renderers/web/host.js",
+            "renderers/ios/VarnGUIHost.swift",
+            "renderers/android/src/main/kotlin/dev/varn/gui/VarnGUIHost.kt",
+        }
+
+        for index = 1, #sources do
+            for call in fs.readFile(sources[index]):await():gmatch("host%.(gui_[%a_]+)") do
+                asked[call] = true
+            end
+        end
+
+        for call in pairs(asked) do
+            assert(contract:find("`" .. call .. "`", 1, true) ~= nil,
+                "docs/porting.md never mentions " .. call .. ", which the framework calls")
+        end
     end
 
     print("gui.host ok")

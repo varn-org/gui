@@ -5,7 +5,7 @@ local M = {}
 --- Every platform takes a cubic bezier: `cubic-bezier` in CSS, `UIViewPropertyAnimator` by its two
 --- control points, and `PathInterpolator` by the same four numbers. Naming a curve here is what stops
 --- three renderers disagreeing about what `easeOut` means.
-M.easings = {
+local easings = {
     linear = { 0, 0, 1, 1 },
     easeIn = { 0.42, 0, 1, 1 },
     easeOut = { 0, 0, 0.58, 1 },
@@ -45,10 +45,16 @@ function M.transition(declared)
         end
     end
 
+    local delay = declared.delay or DEFAULT.delay
+
+    if type(duration) ~= "number" or duration < 0 or type(delay) ~= "number" or delay < 0 then
+        error("a duration and a delay are lengths of time in milliseconds, neither of them negative", 2)
+    end
+
     -- A component may normalise a transition of its own and hand it on, so a curve that is already
     -- four numbers is taken as it is rather than looked up by a name it no longer has.
     local name = declared.easing or DEFAULT.easing
-    local easing = type(name) == "table" and name or M.easings[name]
+    local easing = type(name) == "table" and name or easings[name]
 
     if easing == nil then
         error("there is no easing named " .. tostring(name), 2)
@@ -56,7 +62,7 @@ function M.transition(declared)
 
     return {
         duration = duration,
-        delay = declared.delay or DEFAULT.delay,
+        delay = delay,
         easing = { easing[1], easing[2], easing[3], easing[4] },
     }
 end
@@ -65,7 +71,7 @@ end
 ---
 --- Only opacity and the transform are animated, since neither moves what the layout worked out, so a
 --- node keeps the frame it was given however it is faded, slid or scaled.
-M.transitions = {
+local transitions = {
     none = { enter = {}, exit = {} },
     fade = { enter = { opacity = 0 }, exit = { opacity = 0 } },
     scale = {
@@ -93,11 +99,11 @@ M.transitions = {
 --- Answers the pair of states a named move is made of, or the pair a caller wrote out in full.
 function M.states(declared)
     if declared == nil then
-        return M.transitions.none
+        return transitions.none
     end
 
     if type(declared) == "string" then
-        local named = M.transitions[declared]
+        local named = transitions[declared]
 
         if named == nil then
             error("there is no transition named " .. declared, 2)
@@ -117,7 +123,7 @@ end
 function M.names()
     local found = {}
 
-    for name in pairs(M.transitions) do
+    for name in pairs(transitions) do
         found[#found + 1] = name
     end
 

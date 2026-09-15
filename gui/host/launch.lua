@@ -29,6 +29,32 @@ local function describe(entry, application)
     return application
 end
 
+--- Answers the faces the framework itself ships, as the family and path pairs a renderer registers.
+---
+--- They are registered before a project's own, so a project naming the same family replaces the face
+--- rather than being replaced by it.
+local function frameworkFonts(root)
+    if root == nil then
+        error("the host did not say where the framework is, so its own faces cannot be registered", 0)
+    end
+
+    local declared = require("gui.assets.fonts")
+    local fonts = {}
+
+    for index = 1, #declared do
+        local entry = declared[index]
+
+        fonts[index] = {
+            family = entry.family,
+            weight = entry.weight,
+            style = entry.style,
+            path = root .. "/gui/assets/fonts/" .. entry.file,
+        }
+    end
+
+    return fonts
+end
+
 --- Loads a project and runs it against the host, which is what a sample application launches through.
 ---
 --- The archive is expanded once into the cache, its fonts are registered before the first layout so
@@ -60,8 +86,14 @@ function M.run(path, options)
         end
     end)
 
+    local fonts = frameworkFonts(options.framework)
+
+    for _, font in ipairs(project:fonts()) do
+        fonts[#fonts + 1] = font
+    end
+
     local runtime = bridge.run(application, {
-        fonts = project:fonts(),
+        fonts = fonts,
         theme = options.theme,
         assets = project,
         pictures = store,
@@ -79,7 +111,7 @@ end
 --- A host that shares no filesystem with the engine hands the bytes over instead, which is what the
 --- browser does. The archive is written into the engine's own filesystem once and opened from there,
 --- so everything after this point is the same as launching from a path.
-function M.receive(options)
+local function receive(options)
     options = options or {}
 
     if host == nil or host.gui_archive == nil then
@@ -114,7 +146,7 @@ function M.start(options)
                 return M.run(options.path, options)
             end
 
-            return M.receive(options)
+            return receive(options)
         end)
 
         if not ok then

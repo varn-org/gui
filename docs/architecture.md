@@ -64,6 +64,10 @@ A component is a table with a `render` that returns elements. `setState` marks i
 
 A commit is scheduled, never synchronous, so ten `setState` calls in one handler produce one diff.
 
+State is a table of named fields and `setState` merges into it, so a field it does not name keeps what it had. `gui.none` is how a field is taken away, since a table cannot carry nil: `self:setState({ problem = gui.none })` leaves nothing where the problem was, and `false` is stored as false rather than as nothing at all.
+
+The runtime is one object and what it does falls into contexts of its own, each a file under `gui/runtime/`: what the engine reads out of a node by name, where a picture comes from, what a batch carries once the tokens a caller wrote have been resolved, and the keyboard. Each of those adds its methods to the same object rather than standing beside it, since a picture resolved on the way out, a style resolved with it and a surface lifted clear of the keyboard are all one commit.
+
 A tree also comes down. `Runtime:stop` unmounts it, which fires every `onUnmount` and so ends whatever each component had asked to happen later. Without that a screen that repeats something — a bar that fills and starts again — holds the engine's loop open for the life of the process, since a pending timer is a reason not to idle.
 
 ### The moments a component is told about
@@ -85,6 +89,33 @@ Being built and being seen are two different things, which is what iOS and Andro
 The `will` half runs against the tree as it stands and the other half is held until the batch has reached the platform, which is what makes "before" and "after" mean what they say. A component that was built out of sight hears nothing about appearing until it is shown, and one taken down while it was on screen goes from the screen first and is taken down after.
 
 Whether a subtree is on screen is not something it can work out for itself, so whatever is showing it says: `gui.Showing { value = ... }` marks everything under it. `NavigationStack` and `SplitView` do this for the screens and panes they hold, and anything else that keeps several things and shows one — a tab bar, a pager — does the same.
+
+The answer is there for any component to ask, whether or not it declared a moment: `self:visible()`. A component with a visibility callback is rendered again when the answer changes, since the moment is fired from the render that follows, and one that only asks is answered without that, so a question from inside a timer costs nothing. This is what makes a repeating action honest — `self:every(...)` skips a turn taken out of sight rather than ending, so a pulse on a tab nobody is looking at waits instead of asking for a commit every few hundred milliseconds, and it is there again on coming back. A carousel told to play does the same.
+
+### State that several components share
+
+A component's own state is private to it, which is what keeps a screen readable. Two other shapes exist for what is not.
+
+A **context** carries a value down a tree without being threaded through every component in between, and reading it binds the reader: `gui.context(default)` answers one with a `Provider` and a `read`.
+
+```lua
+local wearing = gui.theming:read(self)
+local route = gui.navigation:read(self)
+```
+
+An **observable** is one value several components read and write, with no tree between them:
+
+```lua
+local chosen = gui.observable("all")
+
+-- In a render, which is what binds the component that drew it.
+local filter = chosen:read(self)
+
+-- In a handler, which renders only the components that read it.
+chosen:set("unread")
+```
+
+Reading it from a render is what makes the change reach the component that drew the value, rather than the one that happens to own it and everything under that. `get` answers without binding, which is what a handler between renders asks. Writing what is already there is not a change and costs nothing.
 
 ## Decision 5: a project is a zip
 

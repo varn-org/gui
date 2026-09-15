@@ -1,9 +1,9 @@
 // What the controls the browser has none of are made of, and what they report when they are used.
 //
 // A segmented control, a rating and a stepper have no element behind them, so the renderer builds each
-// out of parts of its own the way UIKit builds the segments of a UISegmentedControl. All three drew as
-// an empty box and reported nothing at all, which is what "I touch it and nothing happens" was on the
-// page. A chooser had the same hole: its options were declared structural and never applied.
+// out of parts of its own the way UIKit builds the segments of a UISegmentedControl. A part the renderer
+// does not build is an empty box that reports nothing, which is "I touch it and nothing happens" on the
+// page, and a prop declared structural and never applied is the same hole seen from the other side.
 
 import { install } from "../dom.js";
 import { WebRenderer } from "../renderer.js";
@@ -52,8 +52,8 @@ function reported(id) {
 
     assert(element.children.length === 3, `a segmented control must build its segments, has ${element.children.length}`);
     assert(element.children[1].textContent === "Week", "a segment is labelled with what it says");
-    assert(element.children[1].style.opacity === "1", "the chosen segment stands out from the others");
-    assert(element.children[0].style.opacity !== "1", "a segment that is not chosen does not");
+    assert(element.children[1].dataset.varnChosen === "true", "the chosen segment stands out from the others");
+    assert(element.children[0].dataset.varnChosen === "false", "a segment that is not chosen does not");
 
     element.children[2].dispatch("click", {});
     assert(reported(2).length === 1, "choosing a segment must report it");
@@ -87,6 +87,21 @@ function reported(id) {
 
     element.children[0].dispatch("click", {});
     assert(reported(4)[2] === 5, `a stepper counts back down, got ${reported(4)[2]}`);
+}
+
+// A stepper is held to its bounds whatever order the props of one batch arrived in.
+//
+// A json object carries its fields in no order, so a value clamped as it arrives is clamped against
+// whichever bound was applied before it, and the readout shows a number the tree said was out of reach.
+{
+    const element = control(5, "stepper", { value: 50 });
+
+    assert(element.children[1].textContent === "50", `a stepper nobody bounded keeps what it was given, got ${element.children[1].textContent}`);
+
+    renderer.apply([{ op: "update", id: 5, props: { value: 50, minimum: 0, maximum: 10 } }]);
+
+    assert(element.children[1].textContent === "10",
+        `and one that was bounded is held to them, got ${element.children[1].textContent}`);
 }
 
 // A slider stands where its value asks within the range it was given, whatever order the props arrived
@@ -213,7 +228,7 @@ function reported(id) {
 // The web was the only one that built a real chooser, and nothing read what it produced: the component
 // declared no event at all, so a chosen file had nowhere to go on any of the three.
 {
-    const chooser = control(40, "filepicker", {
+    const button = control(40, "filepicker", {
         title: "Choose a file",
         accept: ["image/png", "application/pdf"],
         multiple: true,
@@ -221,6 +236,11 @@ function reported(id) {
         onPick: true,
     });
 
+    const chooser = renderer.nodes.get(40).control;
+
+    // The browser's own chooser carries a caption of its choosing, in the browser's language rather than
+    // the application's, so what a reader presses is the button the caller titled.
+    assert(button.children[0].textContent === "Choose a file", "a chooser is the button it was titled");
     assert(chooser.accept === "image/png,application/pdf", "what a chooser offers reaches it");
     assert(chooser.multiple === true, "and whether it takes more than one");
 
@@ -251,13 +271,13 @@ function reported(id) {
 {
     const row = control(50, "pressable", { onPress: true });
 
-    surface.dispatch("pointerdown", { clientX: 10, clientY: 20 });
+    surface.dispatch("pointerdown", { clientX: 10, clientY: 20, pointerId: 1, buttons: 1 });
     row.dispatch("click", { type: "click", detail: 1 });
 
     assert(reported(50).length === 1, "a finger that stayed put is a press");
 
-    surface.dispatch("pointerdown", { clientX: 10, clientY: 20 });
-    surface.dispatch("pointermove", { clientX: 120, clientY: 24 });
+    surface.dispatch("pointerdown", { clientX: 10, clientY: 20, pointerId: 1, buttons: 1 });
+    surface.dispatch("pointermove", { clientX: 120, clientY: 24, pointerId: 1, buttons: 1 });
     row.dispatch("click", { type: "click", detail: 1 });
 
     assert(reported(50).length === 2, "and one that wandered across it is still a press");
@@ -267,8 +287,8 @@ function reported(id) {
 {
     const row = control(51, "pressable", { onPress: true, onSwipe: true });
 
-    surface.dispatch("pointerdown", { clientX: 10, clientY: 20, target: row });
-    surface.dispatch("pointermove", { clientX: 160, clientY: 24 });
+    surface.dispatch("pointerdown", { clientX: 10, clientY: 20, target: row, pointerId: 1, buttons: 1 });
+    surface.dispatch("pointermove", { clientX: 160, clientY: 24, pointerId: 1, buttons: 1 });
     row.dispatch("click", { type: "click", detail: 1 });
 
     const swipes = events.filter((event) => event.id === 51 && event.name === "onSwipe");
@@ -279,23 +299,150 @@ function reported(id) {
         "and the press it beat is not reported");
 
     // The press after a swipe stands on its own rather than on what the last finger did.
-    surface.dispatch("pointerdown", { clientX: 10, clientY: 20 });
+    surface.dispatch("pointerdown", { clientX: 10, clientY: 20, pointerId: 1, buttons: 1 });
     row.dispatch("click", { type: "click", detail: 1 });
 
     assert(events.filter((event) => event.id === 51 && event.name === "onPress").length === 1,
         "and the press after it is a press again");
 }
 
+// A gesture ends when the pointer comes up, and a pointer moving with nothing held is not a gesture.
+//
+// The travel was armed on the way down and disarmed only by a swipe, so a mouse crossing the page minutes
+// after a click was reported as a swipe on whatever it had last pressed.
+{
+    const row = control(53, "pressable", { onPress: true, onSwipe: true });
+    const swipes = () => events.filter((event) => event.id === 53 && event.name === "onSwipe").length;
+
+    surface.dispatch("pointerdown", { clientX: 10, clientY: 20, target: row, pointerId: 1, buttons: 1 });
+    surface.dispatch("pointerup", { clientX: 10, clientY: 20, pointerId: 1, buttons: 0 });
+    surface.dispatch("pointermove", { clientX: 300, clientY: 400, pointerId: 1, buttons: 0 });
+
+    assert(swipes() === 0, "a pointer moving after it came up is not a swipe");
+
+    surface.dispatch("pointerdown", { clientX: 10, clientY: 20, target: row, pointerId: 1, buttons: 1 });
+    surface.dispatch("pointermove", { clientX: 300, clientY: 24, pointerId: 2, buttons: 1 });
+
+    assert(swipes() === 0, "and neither is a second pointer moving somewhere else");
+
+    surface.dispatch("pointermove", { clientX: 300, clientY: 24, pointerId: 1, buttons: 1 });
+
+    assert(swipes() === 1, "the pointer that went down is the one that swipes");
+}
+
 // A control reached with the keyboard is pressed by the keyboard, whatever a finger did before it.
 {
     const row = control(52, "pressable", { onPress: true, onSwipe: true });
 
-    surface.dispatch("pointerdown", { clientX: 10, clientY: 20, target: row });
-    surface.dispatch("pointermove", { clientX: 160, clientY: 24 });
+    surface.dispatch("pointerdown", { clientX: 10, clientY: 20, target: row, pointerId: 1, buttons: 1 });
+    surface.dispatch("pointermove", { clientX: 160, clientY: 24, pointerId: 1, buttons: 1 });
     row.dispatch("click", { type: "click", detail: 0 });
 
     assert(events.filter((event) => event.id === 52 && event.name === "onPress").length === 1,
         "a click with no pointer behind it is a press");
+}
+
+// A string that says where its own lines end says it on the page too.
+//
+// A browser collapses a line break into a space and a run of spaces into one, and the phones keep both,
+// so a label written in three lines was drawn as one and measured as one — everything below it sat two
+// lines too high, on one platform out of three.
+{
+    const element = control(60, "text", { text: "one\ntwo\nthree" });
+
+    assert(element.style.whiteSpace === "pre-wrap",
+        `a line break is kept where it was written, got ${element.style.whiteSpace}`);
+
+    const one = renderer.measureText("one", { fontSize: 16 }, 0);
+    const three = renderer.measureText("one\ntwo\nthree", { fontSize: 16 }, 0);
+
+    assert(Math.abs(three.height - one.height * 3) < 0.01,
+        `and a label of three lines is three lines tall, got ${three.height} against ${one.height}`);
+}
+
+// A paragraph is broken where the browser breaks it, which is between words rather than by division.
+{
+    const paragraph = "the quick brown fox jumps over the lazy dog and keeps running";
+    const measured = renderer.measureText(paragraph, { fontSize: 16 }, 160);
+    const line = renderer.measureText("one", { fontSize: 16 }, 0).height;
+
+    assert(measured.width === 160, `a wrapped paragraph fills the width it was given, got ${measured.width}`);
+    assert(measured.height / line >= 3, `and takes the lines its words need, got ${measured.height / line}`);
+}
+
+// A box the tree listens to a press on is reached with a tab and worked with a return.
+//
+// A browser gives that to the controls it drew itself and to nothing else, so a row built out of a box
+// was one a reader with no pointer could not open at all. A press that is taken away takes the tab stop
+// with it, or the row is still reached by a reader it now does nothing for.
+{
+    const row = control(80, "pressable", { onPress: true });
+
+    assert(row.getAttribute("tabindex") === "0",
+        `a box that answers a press is reached with a tab, got ${row.getAttribute("tabindex")}`);
+    assert(row.getAttribute("role") === "button", "and says what it is to whatever reads the screen");
+
+    row.dispatch("keydown", { type: "keydown", key: "Enter", preventDefault() {} });
+    assert(reported(80).length === 1, "a return on it is a press");
+
+    renderer.apply([{ op: "update", id: 80, props: { onPress: "__varn_removed__" } }]);
+
+    assert(row.getAttribute("tabindex") === null, "a press taken away takes the tab stop with it");
+    assert(row.getAttribute("role") === null, "and what it said it was");
+
+    row.dispatch("keydown", { type: "keydown", key: "Enter", preventDefault() {} });
+    assert(reported(80).length === 1, "and a return on it is nothing at all");
+}
+
+// A string is drawn in the line it was measured in.
+//
+// The page it is served from sets a line height of its own on the body, so clearing the property when a
+// style names none drew every label in a line taller than the box the engine had reserved: the glyphs
+// sat low in it and the last line spilled past the bottom.
+{
+    const element = control(61, "text", { text: "Apple", style: { fontSize: 16, fontWeight: "600" } });
+    const measured = renderer.measureText("Apple", { fontSize: 16, fontWeight: "600" }, 0);
+
+    assert(element.style.lineHeight === `${measured.height}px`,
+        `a label is drawn in the line it measured, got ${element.style.lineHeight} against ${measured.height}`);
+
+    const declared = control(62, "text", { text: "Apple", style: { fontSize: 20, lineHeight: 1.5 } });
+
+    assert(declared.style.lineHeight === "30px",
+        `and in the one a style names when it names one, got ${declared.style.lineHeight}`);
+}
+
+// What a style does not name is cleared, never written as nothing of its own.
+//
+// A control the browser has none of is drawn by the stylesheet, and an element that writes its own
+// border away cannot then be given one by a rule: every spinner on the page was a ring nothing drew.
+{
+    const spinner = control(63, "activity", { style: { width: 24, height: 24 } });
+
+    assert(spinner.style.borderStyle === "",
+        `a control a rule draws keeps the border of that rule, got "${spinner.style.borderStyle}"`);
+
+    const outlined = control(64, "button", { title: "Outlined", style: { borderColor: "#8c9eff", border: 1 } });
+
+    assert(outlined.style.borderStyle === "solid", "and a border a style names is drawn");
+    assert(outlined.style.borderWidth === "1px", "as wide as it was named");
+}
+
+// A pointer resting over a box is a mouse, never a finger.
+//
+// A browser raises the same two events around every tap, so a row bound to them would light up under a
+// finger and stay lit until the next one landed somewhere else.
+{
+    const row = control(70, "pressable", { onHoverIn: true, onHoverOut: true });
+
+    row.dispatch("pointerenter", { type: "pointerenter", pointerType: "mouse" });
+    assert(reported(70).length === 1, "a mouse arriving over a box is reported");
+
+    row.dispatch("pointerleave", { type: "pointerleave", pointerType: "mouse" });
+    assert(reported(70).length === 2, "and so is one leaving it");
+
+    row.dispatch("pointerenter", { type: "pointerenter", pointerType: "touch" });
+    assert(reported(70).length === 2, "a finger landing on it is not a pointer resting over it");
 }
 
 console.log("web.controls ok");

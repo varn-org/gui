@@ -20,13 +20,29 @@ function Bridge:measureText(text, style, bound)
 end
 
 --- Asks the host what it draws a control at, since a control has a size of its own the way a string has.
-function Bridge:measureControl(kind, variant)
-    return host.gui_measure_control({ type = kind, variant = variant })
+function Bridge:measureControl(kind)
+    return host.gui_measure_control({ type = kind })
+end
+
+--- Tells the host what the application is drawn in, which is what it paints its own ground from.
+---
+--- A page, a window and an activity each draw something around what the tree draws, and none of it is a
+--- node: the ground behind the surface, what a selection is drawn in, and the face a control the platform
+--- owns writes its own captions in. A dark application on a white page is what leaving it out looks like.
+function Bridge:showTheme(ground)
+    host.gui_theme(ground)
 end
 
 --- Reaches a node imperatively, which is what a ref calls through.
 function Bridge:invoke(id, method, arguments)
     return host.gui_invoke({ id = id, method = method, arguments = arguments })
+end
+
+--- Tells the host where the application went, which is what keeps a browser's own history in step.
+---
+--- A phone has nowhere to show an address, so a host that has says so and the rest are never asked.
+function Bridge:address(where, mode)
+    host.gui_address({ address = where, mode = mode })
 end
 
 --- Answers whether the host can do the named thing, which a component checks before asking for it.
@@ -69,6 +85,19 @@ local function registerFonts(fonts, capabilities)
     end
 end
 
+--- Runs work against the tree and reports what fails, which is what an event from the host is given.
+---
+--- The engine calls a subscription from its own delivery, where an error is written to the engine's log
+--- and to nowhere a reader can see. The screen would stop answering with nothing said, so every event
+--- that reaches the tree comes back through here.
+local function safely(app, what, work)
+    local ok, problem = pcall(work)
+
+    if not ok then
+        app:report(what .. " failed: " .. tostring(problem))
+    end
+end
+
 --- Starts a description against the host, wiring the events it reports back into the tree.
 ---
 --- The host owns the run loop and calls poll, so everything a script does lands on the thread that
@@ -90,7 +119,9 @@ function M.run(description, options)
         insets = surface.safeArea,
         scale = surface.scale,
         appearance = surface.appearance,
+        state = surface.state,
         platform = surface.platform,
+        address = surface.address,
         theme = options.theme,
         assets = options.assets,
         pictures = options.pictures,
@@ -113,52 +144,96 @@ function M.run(description, options)
     })
 
     host.on("gui.event", function(event)
-        app:dispatch(event.id, event.name, event.payload)
-        app:commit()
+        safely(app, "an event from the host", function()
+            app:dispatch(event.id, event.name, event.payload)
+            app:commit()
+        end)
+    end)
+
+    host.on("gui.files", function(reply)
+        safely(app, "a file the platform answered for", function()
+            require("gui.files").answered(reply)
+        end)
+    end)
+
+    host.on("gui.preferences", function(reply)
+        safely(app, "a preference the platform answered for", function()
+            require("gui.preferences").answered(reply)
+        end)
     end)
 
     host.on("gui.resize", function(size)
-        app:resize(size.width, size.height)
+        safely(app, "a resize", function()
+            app:resize(size.width, size.height)
 
-        if size.safeArea ~= nil then
-            app:setInsets(size.safeArea)
-        end
+            if size.safeArea ~= nil then
+                app:setInsets(size.safeArea)
+            end
 
-        if size.appearance ~= nil then
-            app:setAppearance(size.appearance)
-        end
+            if size.appearance ~= nil then
+                app:setAppearance(size.appearance)
+            end
 
-        app:commit()
+            app:commit()
+        end)
+    end)
+
+    host.on("gui.address", function(event)
+        safely(app, "an address", function()
+            app:setAddress(event.address or "/")
+            app:commit()
+        end)
     end)
 
     host.on("gui.appearance", function(event)
-        app:setAppearance(event.appearance)
-        app:commit()
+        safely(app, "an appearance change", function()
+            app:setAppearance(event.appearance)
+            app:commit()
+        end)
+    end)
+
+    host.on("gui.lifecycle", function(event)
+        safely(app, "a change of state", function()
+            app:setLifecycle(event.state)
+            app:commit()
+        end)
+    end)
+
+    host.on("gui.memory", function()
+        safely(app, "a warning about memory", function()
+            app:giveBack()
+        end)
     end)
 
     host.on("gui.insets", function(insets)
-        app:setInsets(insets)
-        app:commit()
+        safely(app, "a safe area change", function()
+            app:setInsets(insets)
+            app:commit()
+        end)
     end)
 
     host.on("gui.back", function()
-        app:goBack()
+        safely(app, "a back press", function() app:goBack() end)
     end)
 
     host.on("gui.keyboard", function(event)
-        app:setKeyboard(event.height or 0)
-        app:commit()
+        safely(app, "a keyboard change", function()
+            app:setKeyboard(event.height or 0)
+            app:commit()
+        end)
     end)
 
     host.on("gui.fontsRegistered", function()
-        app:invalidateMeasurements()
-        app:commit()
+        safely(app, "a font registration", function()
+            app:invalidateMeasurements()
+            app:commit()
+        end)
     end)
 
     -- A host that is finished with a surface says so, and the tree comes down: every screen hears it is
     -- going, every timer a screen asked for ends, and everything a node opened is given back.
     host.on("gui.stop", function()
-        app:stop()
+        safely(app, "taking the tree down", function() app:stop() end)
     end)
 
     return app

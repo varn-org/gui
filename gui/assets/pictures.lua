@@ -173,6 +173,16 @@ function Store:bytes(path)
     return nil
 end
 
+--- Gives back the bytes it is holding in memory, which a platform low on it asks for.
+---
+--- What was fetched stays on disk, so nothing has to be fetched again — only the base64 a browser was
+--- handed, which is larger than the picture it carries and is built again the next time one is drawn.
+--- What failed is forgotten too, so a picture that could not be had is tried once more.
+function Store:clear()
+    self.byPath:clear()
+    self.failed:clear()
+end
+
 --- Builds the store a runtime resolves pictures through, told where to keep what it fetches.
 function M.create(root, onSettled)
     fs.mkdir(root)

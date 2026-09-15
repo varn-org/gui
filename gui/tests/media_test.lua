@@ -26,17 +26,26 @@ end
 --- A player over a sound, drawn the way the gallery draws one.
 local Player = gui.component({
     name = "Player",
-    state = { playing = false, position = 0, duration = 0, seeking = nil, ended = 0 },
+    state = { playing = false, position = 0, duration = 0, dragging = nil, ended = 0 },
+
+    seek = function(self, seconds)
+        self:ref("sound"):call("seek", { seconds = seconds })
+        self:setState({ position = seconds, dragging = gui.none })
+    end,
 
     render = function(self)
         return gui.View { style = { grow = 1 },
             gui.Audio {
+                ref = self:ref("sound"),
                 source = "https://example.test/loop.mp3",
                 playing = self.state.playing,
-                position = self.state.seeking,
                 loop = self.props.loop,
                 onReady = function(about) self:setState({ duration = about.duration }) end,
-                onProgress = function(about) self:setState({ position = about.position }) end,
+                onProgress = function(about)
+                    if self.state.dragging == nil then
+                        self:setState({ position = about.position })
+                    end
+                end,
                 onEnd = function() self:setState({ ended = self.state.ended + 1, playing = false }) end,
             },
 
@@ -118,17 +127,37 @@ do
     assert(renderer.nodes[sound.id].props.playing == false, "and it is not asked to play again by itself")
 end
 
--- Seeking is the tree writing a position, which is the same prop the platform reports back.
+-- Seeking is asked for rather than described, so the same moment twice is asked for twice.
 do
     local runtime, renderer = start(Player {})
     local sound = renderer:find("audio")
 
-    assert(sound.props.position == nil, "nothing is sought until a reader drags")
+    assert(sound.props.position == nil, "a sound carries no position at all, since a seek is an action")
+    assert(#renderer.calls == 0, "nothing is sought until a reader drags")
 
-    runtime.root.instance:setState({ seeking = 90 })
+    runtime.root.instance:seek(90)
     runtime:commit()
 
-    assert(renderer.nodes[sound.id].props.position == 90, "a position written by the tree is a seek")
+    assert(#renderer.calls == 1, "letting go of the scrubber seeks once")
+    assert(renderer.calls[1].method == "seek" and renderer.calls[1].arguments.seconds == 90,
+        "and it carries the moment it was dragged to")
+
+    -- What the sound reports while a finger is down is ignored, and the bar follows it again after.
+    runtime.root.instance:setState({ dragging = 30 })
+    runtime:dispatch(sound.id, "onProgress", { position = 91, duration = 184 })
+    runtime:commit()
+
+    assert(runtime.root.instance.state.position == 90, "a report during a drag does not move the bar")
+
+    runtime.root.instance:seek(90)
+    runtime:commit()
+
+    assert(#renderer.calls == 2, "dragging back to the same moment seeks again rather than being silent")
+
+    runtime:dispatch(sound.id, "onProgress", { position = 92, duration = 184 })
+    runtime:commit()
+
+    assert(runtime.root.instance.state.position == 92, "and the bar follows the sound once the finger is up")
 end
 
 print("gui.media ok")

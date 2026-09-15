@@ -211,6 +211,29 @@ class ConformanceTest {
     }
 
     @Test
+    fun testHangsALayerFromTheSurfaceRatherThanFromWhereItWasWritten() {
+        apply(
+            mapOf("op" to "create", "id" to 1, "type" to "view", "props" to JSONObject()),
+            mapOf("op" to "insert", "id" to 1, "parent" to 0, "index" to 1),
+            mapOf("op" to "create", "id" to 2, "type" to "view", "props" to JSONObject()),
+            mapOf("op" to "insert", "id" to 2, "parent" to 1, "index" to 1),
+            mapOf("op" to "create", "id" to 3, "type" to "layer", "props" to JSONObject()),
+            mapOf("op" to "insert", "id" to 3, "parent" to 2, "index" to 1),
+            mapOf("op" to "create", "id" to 4, "type" to "text", "props" to JSONObject(mapOf("text" to "over it"))),
+            mapOf("op" to "insert", "id" to 4, "parent" to 3, "index" to 1),
+        )
+
+        val roots = tree()
+        assertEquals("a layer stands beside the application", 2, roots.size)
+        assertEquals("nothing of it is left where it was written", 0, tree(tree(roots[0])[0]).size)
+        assertEquals(
+            "and what it holds came with it",
+            "over it",
+            (tree(roots[1])[0] as TextView).text.toString(),
+        )
+    }
+
+    @Test
     fun testRefusesABatchThatBreaksTheContract() {
         refuses("an update with no props must be refused") { apply(mapOf("op" to "update", "id" to 1)) }
         refuses("an unknown operation must be refused") { apply(mapOf("op" to "nonsense", "id" to 1)) }
@@ -236,6 +259,23 @@ class ConformanceTest {
         }
     }
 
+    /**
+     * A string that says where its own lines end is measured as tall as it says.
+     *
+     * Every platform's text engine reads a line break, and the browser is the one that collapses it, so
+     * this is what the other two are held to: three lines are three lines, however much room there is.
+     */
+    @Test
+    fun testAStringCarriesTheLinesItWasWrittenWith() {
+        val style = JSONObject(mapOf("fontSize" to 16))
+
+        val one = renderer.measureText("one", style, null).getDouble("height")
+        val three = renderer.measureText("one\ntwo\nthree", style, null).getDouble("height")
+
+        assertTrue("a label of three lines is about three lines tall, was $three against $one",
+            three > one * 2.5 && three < one * 3.5)
+    }
+
     @Test
     fun testMeasuresAStringWithWhatItWillBeDrawnWith() {
         val plain = renderer.measureText("spacing", JSONObject(mapOf("fontSize" to 16)), null)
@@ -250,11 +290,15 @@ class ConformanceTest {
             spaced.getDouble("width") > plain.getDouble("width"),
         )
 
+        // A line is a multiple of the size, and it means that on every platform: asked as a multiple of
+        // the face's own line instead, the same tree is a different height on each.
         val tall = renderer.measureText("spacing", JSONObject(mapOf("fontSize" to 16, "lineHeight" to 3)), null)
 
-        assertTrue(
-            "and space asked for between lines is space the paragraph needs",
-            tall.getDouble("height") > plain.getDouble("height"),
+        assertEquals(
+            "a line is a multiple of the size, so one string at three of them is 48",
+            48.0,
+            tall.getDouble("height"),
+            1.0,
         )
     }
 
@@ -355,11 +399,28 @@ class ConformanceTest {
     }
 
     @Test
+    fun testPaintsItsOwnGroundFromTheTheme() {
+        renderer.showTheme(
+            JSONObject(
+                mapOf(
+                    "appearance" to "dark", "background" to "#101014ff", "text" to "#e7e2eaff",
+                    "primary" to "#8c9effff", "family" to "Roboto",
+                ),
+            ),
+        )
+
+        val painted = (surface.background as? android.graphics.drawable.ColorDrawable)?.color
+
+        assertEquals("the ground it was given is what the window is painted in", 0xff101014.toInt(), painted)
+    }
+
+    @Test
     fun testDeclaresWhatItCanDo() {
         val known = listOf(
             "text", "image", "list", "scroll", "input", "video", "webview", "canvas",
             "picker", "datepicker", "haptics", "safearea", "fontBytes", "imageBytes",
-            "audio", "map", "location", "gradient", "blur",
+            "audio", "map", "location", "gradient", "nineSlice", "blur", "camera", "microphone",
+            "systemBars",
         )
 
         for (name in renderer.capabilities.keys) {

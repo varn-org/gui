@@ -6,6 +6,7 @@
 
 import { install } from "../dom.js";
 import { WebRenderer } from "../renderer.js";
+import { WebHost } from "../host.js";
 
 const surface = install();
 const renderer = new WebRenderer(surface, () => {});
@@ -98,14 +99,27 @@ for (const [at, type] of SCROLLING.entries()) {
     const header = renderer.nodes.get(21).element;
 
     assert(header.style.top === "0px", `it starts where the tree put it, got ${header.style.top}`);
+    assert(header.style.animationName === "varn-pin-block",
+        `it travels with the surface rather than with the tree, got ${header.style.animationName}`);
+    assert(header.style.animationTimeline === "scroll(nearest block)",
+        `driven by the surface it is held in, got ${header.style.animationTimeline}`);
 
-    list.scrollTop = 400;
-    list.dispatch("scroll", {});
-    assert(header.style.top === "400px", `it follows the edge with no commit behind it, got ${header.style.top}`);
+    // It travels with the surface from the surface's own start, so it stands at the edge whatever the
+    // tree has caught up with, and stops where the section beneath pushes it off.
+    assert(header.style.animationRange === "0px 1170px",
+        `over the range the tree named, got ${header.style.animationRange}`);
+    assert(header.style.getPropertyValue("--varn-pin-to") === "1170px",
+        `as far as the range runs, got ${header.style.getPropertyValue("--varn-pin-to")}`);
 
-    list.scrollTop = 1190;
-    list.dispatch("scroll", {});
-    assert(header.style.top === "1170px", `its range runs out and it is pushed off, got ${header.style.top}`);
+    // A row realised while the surface scrolls is inserted where the tree puts it, which is after the
+    // header it belongs under, so the header has to be drawn over what arrives beneath it.
+    renderer.apply([
+        { op: "create", id: 22, type: "view", props: {} },
+        { op: "insert", id: 22, parent: 20, index: 2 },
+        { op: "frame", id: 22, x: 0, y: 1200, width: 390, height: 44 },
+    ]);
+
+    assert(header.style.zIndex === "1", `a held box is drawn over what arrives beneath it, got ${header.style.zIndex}`);
 }
 
 // What a host set up to watch the page is given back when it stops.
@@ -113,8 +127,6 @@ for (const [at, type] of SCROLLING.entries()) {
 // A resize observer and a listener on the visual viewport go on reporting into an engine that has
 // stopped answering, which is a page that keeps working after the application it was showing has gone.
 {
-    const { WebHost } = await import("../host.js");
-
     let polled = 0;
     let observing = 0;
     let listening = 0;
@@ -148,6 +160,29 @@ for (const [at, type] of SCROLLING.entries()) {
 
     assert(observing === 0, "and gives the observer back when it stops");
     assert(removed === 1, "along with every listener it added");
+}
+
+// An engine that stops answering is said out loud rather than left as a frozen screen.
+{
+    const page = install();
+    let said = null;
+
+    globalThis.requestAnimationFrame = () => {};
+    globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+    globalThis.matchMedia = () => ({ addEventListener: () => {}, matches: false });
+
+    const host = new WebHost({
+        varnEmit: () => {},
+        varnPoll: () => { throw new Error("memory access out of bounds"); },
+    }, page);
+
+    host.onProblem = (problem) => { said = problem; };
+    host.running = true;
+    host.pump();
+
+    assert(said !== null && said.includes("the application stopped"),
+        `a page whose engine died says so, it said ${said}`);
+    assert(host.running === false, "and stops pumping, since every tick after the first fails the same way");
 }
 
 console.log("web.scrolling ok");

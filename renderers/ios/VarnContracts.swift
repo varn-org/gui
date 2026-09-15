@@ -8,3 +8,12 @@ import UIKit
 protocol VarnSettling {
     func settle()
 }
+
+/// A view holding something the platform hands out one of, which is given back when the view goes.
+///
+/// A camera and a microphone are the device's rather than the application's: one left running is the
+/// indicator still showing over a screen the reader has already left. Dropping the view would give it
+/// back eventually, and eventually is not when a reader is looking at the light.
+protocol VarnReleasing {
+    func letGo()
+}

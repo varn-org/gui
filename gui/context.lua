@@ -13,7 +13,14 @@ Context.__index = Context
 --- everything for each of them costs more than a frame is worth.
 function Context:read(instance)
     self.readers[instance] = true
+    return self:peek(instance)
+end
 
+--- Answers the same value without remembering who asked, which is what a question between renders needs.
+---
+--- A component that asks what is above it in the middle of a timer is not asking to be rendered again
+--- when the answer changes, and making it a reader would render it for an answer nothing draws.
+function Context:peek(instance)
     local node = instance.node
 
     while node ~= nil do

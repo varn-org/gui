@@ -6,7 +6,7 @@ local M = {}
 M.removed = "__varn_removed__"
 
 --- The value a handler travels as, which tells a renderer to bind the event and report it back by name.
-M.bound = true
+local bound = true
 
 local encodeValue
 
@@ -38,7 +38,7 @@ encodeValue = function(value, seen)
     end
 
     if kind == "function" then
-        return M.bound
+        return bound
     end
 
     if kind == "table" then

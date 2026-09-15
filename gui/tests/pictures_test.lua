@@ -1,4 +1,5 @@
 local async = require("async")
+local waitFor = require("gui.tests.waiting")
 local fs = require("fs")
 local gui = require("gui")
 local pictures = require("gui.assets.pictures")
@@ -101,8 +102,10 @@ async.run(function()
     )
 
     -- The bytes are asked for during a commit and read after it, since a commit cannot wait on a file.
-    async.sleep(40):await()
-    app:commit()
+    waitFor(function()
+        app:commit()
+        return (renderer:find("image").props.source or ""):find("^data:") ~= nil
+    end)
 
     local source = renderer:find("image").props.source
 
@@ -196,7 +199,7 @@ async.run(function()
         { pictures = giving }
     )
 
-    async.sleep(40):await()
+    waitFor(function() return asked > 0 end)
 
     for _ = 1, 5 do
         waiting.repainting = true
@@ -208,6 +211,38 @@ async.run(function()
     pictures.get = answering
 
     assert(asked == 1, "a picture that could not be had is asked for once, got " .. asked)
+
+    -- A player is handed the address itself, which every platform's own player streams.
+    --
+    -- A picture is fetched because a phone hands an address to an image view and quietly draws nothing.
+    -- A film is the other way round: fetching one is a download of the whole thing into memory, and a
+    -- browser refuses the request outright unless the other end allows a page to read it, which left the
+    -- element with nothing to play at all.
+    do
+        local asked = {}
+        local store = pictures.create(ROOT .. "/streamed", function() end)
+
+        store.fetch = function(_, url)
+            asked[#asked + 1] = url
+            return "/cache/fetched"
+        end
+
+        local _, renderer = start(
+            gui.Video {
+                source = "https://example.test/film.mp4",
+                poster = "logo.png",
+                style = { height = 200 },
+            },
+            { pictures = store }
+        )
+
+        local video = renderer:find("video")
+
+        assert(video.props.source == "https://example.test/film.mp4",
+            "a player is given the address it was written with, got " .. tostring(video.props.source))
+        assert(video.props.poster == "logo.png", "and its poster is a picture like any other")
+        assert(#asked == 0, "nothing about a film is fetched by the engine, it asked for " .. #asked)
+    end
 
     print("gui.pictures ok")
 end)

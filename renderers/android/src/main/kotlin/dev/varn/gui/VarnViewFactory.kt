@@ -6,6 +6,12 @@ import android.content.Context
 import android.text.Editable
 import android.text.TextWatcher
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.SurfaceTexture
+import android.view.Surface
+import android.view.TextureView
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
 import android.graphics.Rect
 import android.media.MediaPlayer
 import android.view.MotionEvent
@@ -15,6 +21,7 @@ import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.webkit.WebView
 import android.widget.*
+import org.json.JSONObject
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -23,7 +30,7 @@ import kotlin.math.min
 object VarnViewFactory {
     fun make(context: Context, type: String): View = when (type) {
         "text", "richtext", "badge", "tooltip" -> TextView(context)
-        "image" -> ImageView(context)
+        "image" -> VarnPictureView(context)
         // A button carries no look of its own, since the style a commit carries is what paints it.
         "button" -> Button(context).apply {
             isAllCaps = false
@@ -35,6 +42,7 @@ object VarnViewFactory {
         }
         "textinput", "searchbar" -> VarnTextField(context)
         "textarea" -> VarnTextField(context).apply { isSingleLine = false; minLines = 3 }
+        "richeditor" -> VarnRichEditor(context)
         // One scrolling surface serves every scrolling type, since the engine sends all of them the same thing.
         "scroll", "list", "sectionlist", "grid", "carousel" -> VarnCollectionView(context)
         "switch" -> Switch(context)
@@ -52,11 +60,14 @@ object VarnViewFactory {
         "stepper" -> VarnStepperView(context)
         "filepicker" -> VarnFilePicker(context)
         "colorpicker" -> VarnColorView(context)
-        "webview" -> WebView(context)
+        "webview" -> VarnWebView(context)
         "video" -> VarnVideoView(context)
+        "camera" -> VarnCameraView(context)
+        "recorder" -> VarnRecorderView(context)
         "audio" -> VarnAudioView(context)
         "canvas" -> VarnCanvasView(context)
         "gradient" -> VarnGradientView(context)
+        "nineslice" -> VarnNineSliceView(context)
         "blur" -> VarnBlurView(context)
         "map" -> VarnMapView(context)
         "location" -> VarnLocationView(context)
@@ -128,6 +139,17 @@ class VarnPressTravel(context: Context) {
 class VarnTextField(context: Context) : EditText(context) {
     private val said = LinkedHashSet<String>()
 
+    /** Says where the caret is, which a browser and the two phones each report at a different moment. */
+    var onSelection: ((JSONObject) -> Unit)? = null
+
+    override fun onSelectionChanged(start: Int, end: Int) {
+        super.onSelectionChanged(start, end)
+
+        onSelection?.invoke(
+            JSONObject().put("start", start).put("end", end).put("marks", JSONObject()),
+        )
+    }
+
     /**
      * Told what was typed, by the one watcher this field ever has.
      *
@@ -137,6 +159,16 @@ class VarnTextField(context: Context) : EditText(context) {
     var onTyped: ((String) -> Unit)? = null
 
     init {
+        // A field carries a look of its own from the platform, and the style is what decides it instead.
+        //
+        // An application draws a search pill and puts an editable run inside it, and the run arrives
+        // with the platform's own underline, ground and padding, so the pill has a second box sitting in
+        // it. What the platform owns is the caret, the selection and the keyboard, and the box around
+        // them belongs to whoever wrote the screen. Setting the background clears the padding with it,
+        // so the padding is written back afterwards rather than left to whatever the drawable had.
+        background = null
+        setPadding(0, 0, 0, 0)
+
         addTextChangedListener(object : TextWatcher {
             override fun afterTextChanged(text: Editable) {
                 reported(text.toString())
@@ -173,6 +205,80 @@ class VarnTextField(context: Context) : EditText(context) {
  * The engine sends finished frames, so this never measures or arranges anything: a child is placed
  * exactly where it was told to go.
  */
+/**
+ * A page drawn by the platform's own browser, which reports both ends of every load.
+ *
+ * A page takes as long as a page takes, so a screen drawing a spinner over one has to be told when it
+ * started and when it finished, and told rather than left waiting when it cannot be loaded at all.
+ */
+class VarnWebView(context: Context) : WebView(context) {
+    var onWillLoad: ((String) -> Unit)? = null
+    var onLoad: ((String) -> Unit)? = null
+    var onError: ((String) -> Unit)? = null
+
+    init {
+        webViewClient = object : android.webkit.WebViewClient() {
+            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                onWillLoad?.invoke(url ?: "")
+            }
+
+            override fun onPageFinished(view: WebView?, url: String?) {
+                onLoad?.invoke(url ?: "")
+            }
+
+            override fun onReceivedError(
+                view: WebView?,
+                request: android.webkit.WebResourceRequest?,
+                error: android.webkit.WebResourceError?,
+            ) {
+                if (request?.isForMainFrame == true) {
+                    onError?.invoke(error?.description?.toString() ?: "the page could not be loaded")
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A picture, drawn from what it was loaded with rather than from what was last written over it.
+ *
+ * A tint and a filter both ask for the one colour filter a view has, and the props of one batch arrive in
+ * no order at all, so writing one and then the other lost whichever came first. Each is kept apart and
+ * what draws the picture is worked out from both: a tint replaces the colours of a picture outright, so a
+ * picture that carries one is drawn in it and a filter has nothing left to change.
+ */
+class VarnPictureView(context: Context) : ImageView(context) {
+    var tint: Int? = null
+        set(value) {
+            field = value
+            redraw()
+        }
+
+    var filter: FloatArray? = null
+        set(value) {
+            field = value
+            redraw()
+        }
+
+    private fun redraw() {
+        val colour = tint
+
+        if (colour != null) {
+            setColorFilter(colour)
+            return
+        }
+
+        val matrix = filter
+
+        if (matrix == null) {
+            clearColorFilter()
+            return
+        }
+
+        colorFilter = ColorMatrixColorFilter(ColorMatrix(matrix))
+    }
+}
+
 open class VarnBoxView(context: Context) : ViewGroup(context) {
     /**
      * The range the surface holds this box against its leading edge over, which a header is given.
@@ -182,6 +288,82 @@ open class VarnBoxView(context: Context) : ViewGroup(context) {
      * knows, so each says the part it has.
      */
     var pinned: Pair<Float, Float>? = null
+
+    /**
+     * Where the last touch landed, which is what a menu raised by a long press is drawn at.
+     *
+     * A long click carries no position on this platform, so the one the touch before it landed at is
+     * what a menu has to be drawn from — the corner of the box is not where the finger was.
+     */
+    var touchedAt = Pair(0f, 0f)
+        private set
+
+    /**
+     * Which axis this box claims a drag along, and what it reports while one is happening.
+     *
+     * A scrolling parent takes a touch the moment it decides the finger is a scroll, so a box that wants
+     * the drag has to say so before that: once the finger has gone further than the platform's own
+     * threshold along the claimed axis, the parents are told to stop intercepting.
+     */
+    var panAxis: String? = null
+    var onPan: ((String, Float, Float, Float, Float) -> Unit)? = null
+
+    private var panFrom: Pair<Float, Float>? = null
+    private var panning = false
+    private val panSlop = ViewConfiguration.get(context).scaledTouchSlop
+
+    private fun pan(event: MotionEvent): Boolean {
+        val report = onPan ?: return false
+
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                panFrom = Pair(event.x, event.y)
+                panning = false
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                val from = panFrom ?: return false
+                val dx = event.x - from.first
+                val dy = event.y - from.second
+
+                if (!panning) {
+                    val along = when (panAxis) {
+                        "horizontal" -> abs(dx)
+                        "vertical" -> abs(dy)
+                        else -> max(abs(dx), abs(dy))
+                    }
+
+                    if (along < panSlop) {
+                        return false
+                    }
+
+                    panning = true
+                    parent?.requestDisallowInterceptTouchEvent(true)
+                    report("onPanStart", from.first, from.second, 0f, 0f)
+                }
+
+                report("onPanMove", event.x, event.y, dx, dy)
+                return true
+            }
+
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                val from = panFrom ?: return false
+
+                panFrom = null
+
+                if (!panning) {
+                    return false
+                }
+
+                panning = false
+                parent?.requestDisallowInterceptTouchEvent(false)
+                report("onPanEnd", event.x, event.y, event.x - from.first, event.y - from.second)
+                return true
+            }
+        }
+
+        return false
+    }
 
     /** Answers where it sits for an offset, which is against the edge until its range runs out. */
     fun held(offset: Float, extent: Int): Float {
@@ -203,6 +385,28 @@ open class VarnBoxView(context: Context) : ViewGroup(context) {
 
     /** Told the way a finger went when it went far enough to be a swipe rather than a press. */
     var onSwipe: ((String) -> Unit)? = null
+
+    /**
+     * Told when a finger landed twice in the time the platform counts as one gesture.
+     *
+     * The platform's own detector is what answers this, since how long two taps may be apart and how
+     * far they may be from each other are the platform's rather than a number chosen here.
+     */
+    var onDoublePress: ((Unit) -> Unit)? = null
+        set(value) {
+            field = value
+            twice = if (value == null) null else android.view.GestureDetector(
+                context,
+                object : android.view.GestureDetector.SimpleOnGestureListener() {
+                    override fun onDoubleTap(event: MotionEvent): Boolean {
+                        onDoublePress?.invoke(Unit)
+                        return true
+                    }
+                },
+            )
+        }
+
+    private var twice: android.view.GestureDetector? = null
 
     /**
      * Whether a finger passes through this box and everything inside it.
@@ -227,10 +431,20 @@ open class VarnBoxView(context: Context) : ViewGroup(context) {
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            touchedAt = Pair(event.x, event.y)
+        }
+
+        if (pan(event)) {
+            return true
+        }
+
         // A box nothing is listening to answers a finger the way any other box does, which is not at all.
         if (!isClickable) {
             return super.onTouchEvent(event)
         }
+
+        twice?.onTouchEvent(event)
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -437,10 +651,15 @@ class VarnSlopDelegate(private val host: VarnBoxView) : TouchDelegate(Rect(), ho
 /**
  * Plays what it was given, holding what it was told until the player is ready to be told it.
  *
- * A player answers none of this before it is prepared, and it reports being prepared to one listener,
- * so every one of these setting its own left whichever arrived last replacing the rest.
+ * A player answers none of this before it is prepared, and it reports being prepared to one listener, so
+ * every one of these setting its own left whichever arrived last replacing the rest.
+ *
+ * It draws into a texture rather than into a surface of its own, which is what lets a look reach it: a
+ * surface is composited past the view hierarchy, so nothing drawn by the tree can colour it, and a video
+ * in black and white on the other two platforms came out untouched here. The platform's own controls are
+ * kept by answering what the controller asks of whatever it is attached to.
  */
-class VarnVideoView(context: Context) : VideoView(context), VarnReleasing {
+class VarnVideoView(context: Context) : FrameLayout(context), VarnReleasing, MediaController.MediaPlayerControl {
     var muted: Boolean = false
         set(value) { field = value; settle() }
 
@@ -453,18 +672,138 @@ class VarnVideoView(context: Context) : VideoView(context), VarnReleasing {
     var rate: Float = 1f
         set(value) { field = value; settle() }
 
+    var resizeMode: String = "contain"
+        set(value) { field = value; shape() }
+
+    var filter: FloatArray? = null
+        set(value) {
+            field = value
+            paint()
+        }
+
+    var onEnd: (() -> Unit)? = null
+
+    /** Told when what it was given cannot be played at all, which is otherwise a black box. */
+    var onError: ((String) -> Unit)? = null
+
+    private val screen = TextureView(context)
     private var player: MediaPlayer? = null
+    private var source: android.net.Uri? = null
+    private var prepared = false
+    private var wanted = false
+    private var controller: MediaController? = null
 
     init {
-        setOnPreparedListener {
-            player = it
+        addView(screen, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+
+        screen.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+            override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
+                open()
+            }
+
+            override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {
+                shape()
+            }
+
+            override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
+                release()
+                return true
+            }
+
+            override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
+        }
+    }
+
+    fun setVideoURI(uri: android.net.Uri) {
+        source = uri
+        release()
+        open()
+    }
+
+    /** Shows the still a video stands behind until it has something of its own to draw. */
+    fun showPoster(path: String?) {
+        background = path?.let { android.graphics.drawable.Drawable.createFromPath(it) }
+    }
+
+    /** Draws the platform's own controls over the video, or takes them away. */
+    fun showControls(showing: Boolean) {
+        if (!showing) {
+            controller?.hide()
+            controller = null
+            return
+        }
+
+        val built = MediaController(context)
+
+        built.setAnchorView(this)
+        built.setMediaPlayer(this)
+        built.isEnabled = true
+
+        controller = built
+    }
+
+    override fun start() {
+        wanted = true
+
+        if (prepared) {
+            player?.start()
             settle()
         }
     }
 
+    override fun pause() {
+        wanted = false
+        player?.pause()
+    }
+
     override fun release() {
-        stopPlayback()
+        player?.release()
         player = null
+        prepared = false
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        controller?.show()
+        return controller != null
+    }
+
+    private fun open() {
+        val uri = source ?: return
+        val texture = screen.surfaceTexture ?: return
+
+        if (player != null) {
+            return
+        }
+
+        val built = MediaPlayer()
+
+        built.setSurface(Surface(texture))
+        built.setOnPreparedListener {
+            prepared = true
+            settle()
+            shape()
+
+            if (wanted) {
+                built.start()
+            }
+        }
+
+        built.setOnCompletionListener { onEnd?.invoke() }
+        built.setOnErrorListener { _, what, extra ->
+            onError?.invoke("the film could not be played ($what, $extra)")
+            true
+        }
+
+        runCatching {
+            built.setDataSource(context, uri)
+            built.prepareAsync()
+        }.onFailure { problem ->
+            built.release()
+            onError?.invoke(problem.message ?: "the film could not be opened")
+            return
+        }
+
+        player = built
     }
 
     private fun settle() {
@@ -474,10 +813,66 @@ class VarnVideoView(context: Context) : VideoView(context), VarnReleasing {
         ready.setVolume(level, level)
         ready.isLooping = looping
 
-        if (rate > 0f) {
+        if (rate > 0f && ready.isPlaying) {
             ready.playbackParams = ready.playbackParams.setSpeed(rate)
         }
     }
+
+    /** Fits what the player produced into the box the engine gave it, the way each mode says. */
+    private fun shape() {
+        val ready = player ?: return
+        val wide = ready.videoWidth.toFloat()
+        val tall = ready.videoHeight.toFloat()
+
+        if (wide <= 0f || tall <= 0f || width <= 0 || height <= 0) {
+            return
+        }
+
+        val across = width / wide
+        val down = height / tall
+        val scale = if (resizeMode == "cover") max(across, down) else min(across, down)
+
+        val matrix = android.graphics.Matrix()
+
+        matrix.setScale(wide * scale / width, tall * scale / height, width / 2f, height / 2f)
+        screen.setTransform(matrix)
+    }
+
+    private fun paint() {
+        val matrix = filter
+
+        if (matrix == null || matrix.size != 20) {
+            screen.setLayerType(View.LAYER_TYPE_NONE, null)
+            return
+        }
+
+        val paint = Paint()
+        paint.colorFilter = ColorMatrixColorFilter(ColorMatrix(matrix))
+
+        screen.setLayerType(View.LAYER_TYPE_HARDWARE, paint)
+    }
+
+    override fun getDuration(): Int = if (prepared) player?.duration ?: 0 else 0
+
+    override fun getCurrentPosition(): Int = if (prepared) player?.currentPosition ?: 0 else 0
+
+    override fun seekTo(position: Int) {
+        if (prepared) {
+            player?.seekTo(position)
+        }
+    }
+
+    override fun isPlaying(): Boolean = prepared && player?.isPlaying == true
+
+    override fun getBufferPercentage(): Int = 0
+
+    override fun canPause(): Boolean = true
+
+    override fun canSeekBackward(): Boolean = true
+
+    override fun canSeekForward(): Boolean = true
+
+    override fun getAudioSessionId(): Int = player?.audioSessionId ?: 0
 }
 
 /**
@@ -485,7 +880,7 @@ class VarnVideoView(context: Context) : VideoView(context), VarnReleasing {
  *
  * The engine sizes it, so the three parts simply share the width it was given.
  */
-class VarnStepperView(context: Context) : VarnBoxView(context) {
+class VarnStepperView(context: Context) : VarnBoxView(context), VarnSettling {
     private val less = Button(context).apply { text = "\u2212" }
     private val more = Button(context).apply { text = "+" }
     private val readout = TextView(context).apply { gravity = android.view.Gravity.CENTER }
@@ -509,12 +904,24 @@ class VarnStepperView(context: Context) : VarnBoxView(context) {
     }
 
     fun setValue(next: Double) {
-        value = next.coerceIn(minimum, maximum)
+        value = next
+        show()
+    }
+
+    /**
+     * Holds the value to the bounds once the whole batch is in.
+     *
+     * How far it may go and what it is worth are three props of one batch, which arrive in no order, so
+     * a value clamped as it arrives is clamped against whichever bound was applied before it.
+     */
+    override fun settle() {
+        value = value.coerceIn(minOf(minimum, maximum), maxOf(minimum, maximum))
         show()
     }
 
     private fun move(by: Double) {
-        setValue(value + by)
+        value = (value + by).coerceIn(minOf(minimum, maximum), maxOf(minimum, maximum))
+        show()
         onValueChange?.invoke(value)
     }
 

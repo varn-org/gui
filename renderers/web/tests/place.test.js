@@ -161,7 +161,10 @@ function reported(id, name) {
         },
     });
 
-    build(3, "location", { watch: false, accuracy: "fine", onChange: true, onError: true });
+    // A receiver is framed like every other node, and a renderer that asks a receiver to resize itself
+    // the way it asks a map takes the whole screen down on the frame that follows the first fix.
+    build(3, "location", { watch: false, accuracy: "fine", onChange: true, onError: true },
+        { width: 320, height: 180 });
 
     const fixes = reported(3, "onChange");
 

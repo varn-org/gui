@@ -242,6 +242,110 @@ do
     assert(dismissed, "pressing outside an open drawer must ask for it to close")
 end
 
+-- A drawer raised from a screen inside a shape covers the shape, bar and all.
+--
+-- It is a menu over the application rather than over the middle of it, which is what it read as while it
+-- was laid out where it was written: the bar stood above the darkness and stayed pressable behind it.
+do
+    local _, renderer = start(gui.Scaffold {
+        bar = gui.AppBar { title = "Inbox" },
+
+        gui.Drawer {
+            open = true,
+            width = 260,
+            onClose = function() end,
+            content = gui.Text { text = "what the drawer holds" },
+        },
+    })
+
+    local found = renderer:findAll("layer")
+
+    assert(#found == 1, "an open drawer is drawn through one portal, drew " .. #found)
+    assert(found[1].frame.y == 0 and found[1].frame.height == 844,
+        "and it covers the application rather than the screen under the bar, covers "
+            .. found[1].frame.y .. " to " .. (found[1].frame.y + found[1].frame.height))
+end
+
+-- A panel that covers the application keeps the system clear of what it holds.
+--
+-- Drawn over the whole surface it stands under the clock and over the home indicator, which a panel
+-- written inside a screen was never close enough to reach: the first line of a drawer was printed across
+-- the time. What a panel touches is inset, and what it does not touch has a screen behind it rather than
+-- the system, so nothing is inset where there is nothing to avoid.
+do
+    local renderer = gui.headless()
+    local runtime = gui.start(
+        gui.View { style = { grow = 1 },
+            gui.Drawer {
+                open = true,
+                width = 260,
+                onClose = function() end,
+                content = gui.Text { text = "what the drawer holds" },
+            },
+        },
+        renderer,
+        { size = { width = 390, height = 844 }, insets = { top = 47, right = 0, bottom = 34, left = 0 } }
+    )
+
+    for _ = 1, 4 do
+        if not runtime:needsCommit() then
+            break
+        end
+
+        runtime:commit()
+    end
+
+    local label = nil
+
+    for _, node in pairs(renderer.nodes) do
+        if node.type == "text" and node.props.text == "what the drawer holds" then
+            label = node
+        end
+    end
+
+    assert(label ~= nil, "the drawer holds what it was given")
+    assert(label.frame.y >= 47,
+        "and what it holds starts below what the system draws, starts at " .. label.frame.y)
+end
+
+-- A drawer leaves the way it came, on whichever side it was opened from.
+do
+    local function travelling(side)
+        local renderer = gui.headless()
+        local runtime = gui.start(
+            gui.View { style = { grow = 1 },
+                gui.Drawer { open = true, side = side, width = 260, onClose = function() end,
+                    content = gui.Text { text = "held" } },
+            },
+            renderer,
+            { size = { width = 390, height = 844 } }
+        )
+
+        for _ = 1, 4 do
+            if not runtime:needsCommit() then
+                break
+            end
+
+            runtime:commit()
+        end
+
+        for _, node in pairs(renderer.nodes) do
+            local enter = node.props.enter
+
+            if enter ~= nil and enter.transform ~= nil and enter.transform.translateX ~= nil then
+                return enter.transform.translateX
+            end
+        end
+
+        return nil
+    end
+
+    assert(travelling("left") == "-100%", "a drawer on the left arrives from the left, arrives from "
+        .. tostring(travelling("left")))
+    assert(travelling("right") == "100%", "and one on the right from the right, arrives from "
+        .. tostring(travelling("right")))
+end
+
 -- A table is a header over a list, so what it holds is on screen and sorted the way it was asked for.
 do
     local sorted = nil

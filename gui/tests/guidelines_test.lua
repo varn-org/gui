@@ -168,4 +168,70 @@ do
     assert(#silent == 0, "these can be pressed and say nothing at all:\n  " .. table.concat(silent, "\n  "))
 end
 
-print("gui.guidelines ok")
+-- Nothing clears a field of state by writing nil into the table it hands to setState.
+--
+-- A Lua table has no key whose value is nil, so `setState({ open = nil })` is `setState({})` and the
+-- field keeps what it had: an inbox would not come back from a message, and a camera showing a film went
+-- on showing it after the next picture was taken. `gui.none` is what the framework has for clearing one,
+-- and nothing says so at the call, which is why it is asked for here.
+do
+    local fs = require("fs")
+    local async = require("async")
+
+    async.run(function()
+        local roots = { "gui", "gui/components", "gui/collections", "sample", "sample/demos", "sample/apps" }
+        local written = {}
+
+        for _, folder in ipairs(roots) do
+            local names = fs.readdir(folder):await()
+
+            for index = 1, #names do
+                local path = folder .. "/" .. names[index]
+
+                if path:match("%.lua$") and not path:match("/tests/") then
+                    local source = fs.readFile(path):await()
+
+                    for line in source:gmatch("[^\n]+") do
+                        if line:find("setState", 1, true) ~= nil and line:match("%w+%s*=%s*nil") ~= nil then
+                            written[#written + 1] = path .. ": " .. line:gsub("^%s+", "")
+                        end
+                    end
+                end
+            end
+        end
+
+        assert(#written == 0, #written .. " calls clear a field with nil, which changes nothing:\n  "
+            .. table.concat(written, "\n  "))
+
+        -- Nothing a reader can press is there to be looked at.
+        --
+        -- A handler with an empty body is a control that answers a finger by doing nothing, which reads
+        -- as a broken screen rather than as a demonstration: a search that searched nothing, a menu that
+        -- opened nothing, a field whose text was thrown away as it was typed. What the data behind it is
+        -- does not matter, and that it is invented least of all.
+        local idle = {}
+
+        for _, folder in ipairs({ "sample", "sample/demos", "sample/apps" }) do
+            local names = fs.readdir(folder):await()
+
+            for index = 1, #names do
+                local path = folder .. "/" .. names[index]
+
+                if path:match("%.lua$") then
+                    local source = fs.readFile(path):await()
+
+                    for line in source:gmatch("[^\n]+") do
+                        if line:match("on%u[%a]*%s*=%s*function%s*%([^)]*%)%s*end") ~= nil then
+                            idle[#idle + 1] = path .. ": " .. line:gsub("^%s+", "")
+                        end
+                    end
+                end
+            end
+        end
+
+        assert(#idle == 0, #idle .. " controls answer a finger by doing nothing:\n  "
+            .. table.concat(idle, "\n  "))
+
+        print("gui.guidelines ok")
+    end)
+end

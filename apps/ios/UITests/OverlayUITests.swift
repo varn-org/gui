@@ -3,9 +3,8 @@ import XCTest
 /// Opens everything that is shown over a screen and looks at it.
 ///
 /// A screenshot of a demo shows the state it opens in, and an overlay is not in it. Every one of these
-/// is a thing a person has to touch before it exists at all, which is why none of them had been looked
-/// at: a modal that draws behind its own scrim and a menu with a button on top of it both pass every
-/// case that reads the tree.
+/// is a thing a person has to touch before it exists at all, and a modal that draws behind its own scrim
+/// and a menu with a button on top of it both pass every case that reads the tree.
 final class OverlayUITests: XCTestCase {
     private var app: XCUIApplication!
 
@@ -48,6 +47,53 @@ final class OverlayUITests: XCTestCase {
         shot.name = name
         shot.lifetime = .keepAlways
         add(shot)
+    }
+
+    /// Answers the system's own alert, which is what stands between a screen and a device it asked for.
+    private func allow() {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let allowed = springboard.buttons.matching(NSPredicate(format: "label IN %@", ["Allow", "Permitir",
+                                                                                      "OK"])).firstMatch
+
+        if allowed.waitForExistence(timeout: 5) {
+            allowed.tap()
+        }
+    }
+
+    /// The camera itself, which only a device has: a simulator answers a preview that never arrives.
+    ///
+    /// Everything else about a camera can be driven anywhere — the props it carries, the events it
+    /// reports, the actions it answers — and none of that says the session ever opened or that anything
+    /// was written. This is the one case that only runs where there is a camera to open.
+    func testACameraOpensAndTakesAPicture() throws {
+        try XCTSkipIf(isSimulator, "a simulator has no camera to open")
+
+        open("capture/camera")
+
+        XCTAssertTrue(press("Turn the camera on"), "the demo must offer to turn the camera on")
+        allow()
+
+        let opened = shows("Looking back", 20)
+        keep("camera")
+
+        XCTAssertTrue(opened, "the camera must open and say which way it is looking, screen said: \(said())")
+
+        XCTAssertTrue(press("Take a picture"), "the demo must offer to take one")
+        XCTAssertTrue(shows("Took a picture", 20), "and what it took must come back as a file")
+        keep("a picture taken")
+    }
+
+    /// Everything written on the screen, which is what a failure has to say to be worth reading.
+    private func said() -> String {
+        app.staticTexts.allElementsBoundByIndex.map { $0.label }.joined(separator: " | ")
+    }
+
+    private var isSimulator: Bool {
+        #if targetEnvironment(simulator)
+        return true
+        #else
+        return ProcessInfo.processInfo.environment["SIMULATOR_DEVICE_NAME"] != nil
+        #endif
     }
 
     func testAModalIsShownOverTheScreen() {
@@ -107,5 +153,31 @@ final class OverlayUITests: XCTestCase {
         XCTAssertTrue(press("Open the drawer"), "the demo must offer a drawer")
         XCTAssertTrue(shows("A drawer"), "a drawer must offer what it holds")
         keep("drawer")
+    }
+
+    /// A drawer covers the application rather than the middle of it, bar and all.
+    ///
+    /// Laid out where it was written it covered the screen under the bar, so the way back was above the
+    /// darkness and still answered a finger. It is drawn through a portal, so what it covers is the whole
+    /// surface and nothing under it can be pressed.
+    func testADrawerCoversTheBarAboveIt() {
+        open("presentation/menus")
+
+        let title = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Menus and drawers")).firstMatch
+
+        XCTAssertTrue(title.waitForExistence(timeout: 10), "the screen sits under a bar carrying its title")
+
+        XCTAssertTrue(press("Open the drawer"), "the demo must offer a drawer")
+        XCTAssertTrue(shows("A drawer"), "a drawer must offer what it holds")
+
+        let ground = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Dismiss")).firstMatch
+
+        XCTAssertTrue(ground.exists, "an open drawer darkens what it covers")
+        XCTAssertTrue(ground.frame.contains(title.frame),
+                      "and what it covers reaches over the bar, covering \(ground.frame) against \(title.frame)")
+
+        keep("drawer over the bar")
     }
 }

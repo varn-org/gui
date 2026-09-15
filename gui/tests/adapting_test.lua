@@ -47,6 +47,21 @@ local function holds(renderer, wanted)
     return false
 end
 
+--- Answers whether a box is out of sight, which is drawn at nothing or moved the whole of its own width.
+local function hidden(style)
+    if style == nil then
+        return false
+    end
+
+    if style.opacity == 0 then
+        return true
+    end
+
+    local moved = style.transform ~= nil and style.transform.translateX or nil
+
+    return moved == "100%" or moved == "-100%"
+end
+
 --- Answers whether something is actually on screen rather than merely held somewhere in the tree.
 ---
 --- Both panes stay mounted whichever there is room for, since taking one down loses everything a reader
@@ -57,9 +72,7 @@ local function seen(renderer, wanted)
             local up = node
 
             while up ~= nil do
-                local style = up.props.style
-
-                if style ~= nil and style.opacity == 0 then
+                if hidden(up.props.style) then
                     return false
                 end
 

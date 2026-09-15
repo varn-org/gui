@@ -252,10 +252,9 @@ local Pickers = gui.component({
             },
 
             parts.Block {
-                title = "A date, turned rather than typed",
-                summary = "The wheel people expect on a phone",
+                title = "A date",
+                summary = "The control each platform has for choosing one",
                 gui.DatePicker {
-                    display = "wheel",
                     value = self.state.when,
                     onChange = function(value) self:setState({ when = value }) end,
                 },

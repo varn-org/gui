@@ -50,7 +50,8 @@ enum VarnStyle {
     static func font(from style: [String: Any]) -> UIFont {
         let size = VarnValue.number(style["fontSize"]) ?? 15
         let weight = self.weight(style["fontWeight"])
-        let base = named(style["fontFamily"] as? String, size) ?? UIFont.systemFont(ofSize: size, weight: weight)
+        let base = named(style["fontFamily"] as? String, size, weight)
+            ?? UIFont.systemFont(ofSize: size, weight: weight)
 
         guard (style["fontStyle"] as? String) == "italic" else {
             return base
@@ -63,12 +64,22 @@ enum VarnStyle {
         return UIFont(descriptor: slanted, size: size)
     }
 
-    private static func named(_ family: String?, _ size: CGFloat) -> UIFont? {
-        guard let family else {
+    /// Answers the face of a registered family that carries the weight asked for.
+    ///
+    /// A family is a name over several files and `UIFont(name:)` answers one of them, so the descriptor
+    /// is matched against the faces the family actually has, which is what picks among them by weight.
+    /// A name no file registered under is not a family, and the system font is what draws it instead.
+    private static func named(_ family: String?, _ size: CGFloat, _ weight: UIFont.Weight) -> UIFont? {
+        guard let family, !UIFont.fontNames(forFamilyName: family).isEmpty else {
             return nil
         }
 
-        return UIFont(name: family, size: size)
+        let descriptor = UIFontDescriptor(fontAttributes: [
+            .family: family,
+            .traits: [UIFontDescriptor.TraitKey.weight: weight],
+        ])
+
+        return UIFont(descriptor: descriptor, size: size)
     }
 
     /// Answers everything a string is drawn with, which is what it is measured with too.
@@ -76,7 +87,8 @@ enum VarnStyle {
     /// Spacing between letters and between lines change how much room a paragraph needs, so measuring
     /// without them measures something the reader never sees.
     static func attributes(from style: [String: Any]) -> [NSAttributedString.Key: Any] {
-        var attributes: [NSAttributedString.Key: Any] = [.font: font(from: style)]
+        let drawn = font(from: style)
+        var attributes: [NSAttributedString.Key: Any] = [.font: drawn]
 
         if let spacing = VarnValue.number(style["letterSpacing"]), spacing != 0 {
             attributes[.kern] = spacing
@@ -96,7 +108,13 @@ enum VarnStyle {
 
         let paragraph = NSMutableParagraphStyle()
 
-        paragraph.lineHeightMultiple = multiple
+        // A line is a multiple of the size, which is what the other two read it as. Asking UIKit for a
+        // multiple of the font's own line instead gives the same tree a different height on each
+        // platform, since no two faces agree about what their line is.
+        let line = drawn.pointSize * multiple
+
+        paragraph.minimumLineHeight = line
+        paragraph.maximumLineHeight = line
         paragraph.alignment = alignment(style["textAlign"])
         attributes[.paragraphStyle] = paragraph
 
@@ -225,7 +243,6 @@ enum VarnStyle {
             label.textAlignment = alignment(style["textAlign"])
             label.insets = padding
             label.typography = attributes(from: style)
-            applyLines(style, to: label)
             return
         }
 
@@ -233,7 +250,6 @@ enum VarnStyle {
             label.font = font(from: style)
             label.textColor = foreground ?? .label
             label.textAlignment = alignment(style["textAlign"])
-            applyLines(style, to: label)
             return
         }
 
@@ -256,20 +272,8 @@ enum VarnStyle {
         if let button = view as? UIButton {
             button.titleLabel?.font = font(from: style)
             button.setTitleColor(foreground ?? .tintColor, for: .normal)
-            button.contentEdgeInsets = padding
+            (button as? VarnButton)?.insets = padding
         }
-    }
-
-    /// Says how many lines a label may run to, leaving alone what it was already told.
-    ///
-    /// How many lines a paragraph runs to is a prop rather than part of a style, and props and styles
-    /// arrive in no order at all, so writing a default here took away what the prop had just set.
-    private static func applyLines(_ style: [String: Any], to label: UILabel) {
-        guard let lines = style["numberOfLines"] as? Int else {
-            return
-        }
-
-        label.numberOfLines = lines
     }
 
     static func alignment(_ value: Any?) -> NSTextAlignment {

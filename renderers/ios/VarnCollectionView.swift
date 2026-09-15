@@ -74,8 +74,46 @@ final class VarnCollectionView: UIScrollView {
     }
 
     override func layoutSubviews() {
+        let ended = atEnd
+        let had = bounds.size
+
         super.layoutSubviews()
         resize()
+
+        // A surface showing its last row goes on showing it when the room it has shrinks, which is what
+        // the keyboard coming up does to a conversation: the composer rises with it and the message
+        // being answered would otherwise slide away under the keyboard rather than staying in view.
+        guard ended, bounds.height < had.height || bounds.width < had.width else {
+            return
+        }
+
+        toEnd()
+    }
+
+    /// Whether the surface is showing the end of what it holds, within a point of it.
+    ///
+    /// A surface with nothing to scroll is not at its end, it is simply all there: reading it as one
+    /// takes a list that fits and, the moment it grows past its box, throws it to the bottom.
+    private var atEnd: Bool {
+        let room = horizontal ? contentSize.width - bounds.width : contentSize.height - bounds.height
+
+        guard room > 1 else {
+            return false
+        }
+
+        return (horizontal ? contentOffset.x : contentOffset.y) >= room - 1
+    }
+
+    private func toEnd() {
+        let offset = horizontal
+            ? CGPoint(x: max(0, contentSize.width - bounds.width), y: contentOffset.y)
+            : CGPoint(x: contentOffset.x, y: max(0, contentSize.height - bounds.height))
+
+        guard offset != contentOffset else {
+            return
+        }
+
+        setContentOffset(offset, animated: false)
     }
 
     /// Sizes the content layer, leaving the scroll view alone when nothing about it has changed.
@@ -96,15 +134,22 @@ final class VarnCollectionView: UIScrollView {
         content.frame = CGRect(origin: .zero, size: size)
     }
 
-    /// Keeps every box the tree pinned against the leading edge as the surface moves under it.
+    /// Keeps every box the tree pinned against the leading edge as the surface moves under it, and over
+    /// whatever arrives beneath it.
     ///
-    /// The tree cannot do this: a commit follows a finger rather than leading it, so a header placed
-    /// from there drifts across the rows it is meant to cover on every flick.
+    /// The tree cannot do the first: a commit follows a finger rather than leading it, so a header
+    /// placed from there drifts across the rows it is meant to cover on every flick. It cannot do the
+    /// second either: a row realised while the surface scrolls is inserted where the tree puts it, which
+    /// is under the header it belongs to and over it on the screen. Raising one costs a reordering, so
+    /// it is done when something loose has landed above it rather than on every frame.
     func hold() {
         let offset = horizontal ? contentOffset.x : contentOffset.y
+        var covered: [VarnView] = []
+        var loose = false
 
-        for view in content.subviews {
+        for view in content.subviews.reversed() {
             guard let box = view as? VarnView, box.pinned != nil else {
+                loose = true
                 continue
             }
 
@@ -112,10 +157,17 @@ final class VarnCollectionView: UIScrollView {
 
             if horizontal {
                 box.frame.origin.x = along
-                continue
+            } else {
+                box.frame.origin.y = along
             }
 
-            box.frame.origin.y = along
+            if loose {
+                covered.append(box)
+            }
+        }
+
+        for box in covered.reversed() {
+            content.bringSubviewToFront(box)
         }
     }
 }
@@ -133,6 +185,15 @@ extension VarnCollectionView: UIScrollViewDelegate {
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         hold()
-        onScroll?(["x": scrollView.contentOffset.x, "y": scrollView.contentOffset.y])
+        reportOffset()
+    }
+
+    /// Says where the surface is now, which is what the engine asks for the moment it starts listening.
+    ///
+    /// A surface only ever reported the next time a finger moved it, so an engine that had just been
+    /// told to care took the surface to be at the top: a field was lifted from the wrong place and the
+    /// surface was put back somewhere it had never been.
+    func reportOffset() {
+        onScroll?(["x": contentOffset.x, "y": contentOffset.y])
     }
 }

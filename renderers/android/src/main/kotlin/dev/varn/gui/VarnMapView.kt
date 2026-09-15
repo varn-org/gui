@@ -2,21 +2,16 @@ package dev.varn.gui
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
-import android.util.LruCache
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
 import android.view.ViewConfiguration
-import java.net.HttpURLConnection
-import java.net.URL
-import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.atan
 import kotlin.math.floor
@@ -50,16 +45,10 @@ class VarnMapView(context: Context) : View(context), VarnSettling, VarnReleasing
 
     private class Marker(val key: String, val latitude: Double, val longitude: Double, val title: String?)
 
-    private val tiles = object : LruCache<String, Bitmap>(HELD) {
-        override fun sizeOf(key: String, value: Bitmap) = value.byteCount / 1024
-    }
-
-    /** Whether the tiles this was drawing have been given back, after which it asks for none. */
+    /** Whether this has been given back, after which it asks for no tile and draws nothing more. */
     var closed = false
         private set
 
-    private val asked = mutableSetOf<String>()
-    private val fetchers = Executors.newFixedThreadPool(3)
     private val main = Handler(Looper.getMainLooper())
 
     private val tilePaint = Paint(Paint.FILTER_BITMAP_FLAG)
@@ -91,6 +80,7 @@ class VarnMapView(context: Context) : View(context), VarnSettling, VarnReleasing
         labelPaint.textSize = 11f * density
         labelPaint.isFakeBoldText = true
         creditPaint.textSize = 10f * density
+        VarnTiles.listen(context)
     }
 
     fun setCenter(center: JSONObject?) {
@@ -138,9 +128,7 @@ class VarnMapView(context: Context) : View(context), VarnSettling, VarnReleasing
         }
 
         closed = true
-        fetchers.shutdownNow()
         main.removeCallbacksAndMessages(null)
-        tiles.evictAll()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -218,53 +206,28 @@ class VarnMapView(context: Context) : View(context), VarnSettling, VarnReleasing
         }
     }
 
-    /** Answers a tile if it is already here, and asks for it once if it is not. */
+    /** Answers a tile if it has already been fetched, and asks for it once if it has not. */
     private fun tile(level: Int, x: Int, y: Int): Bitmap? {
         if (closed) {
             return null
         }
 
         val name = "$level/$x/$y"
-        val held = tiles.get(name)
+        val held = VarnTiles.get(name)
 
         if (held != null) {
             return held
         }
 
-        if (!asked.add(name)) {
-            return null
-        }
-
-        fetchers.execute {
-            val drawn = fetch(name)
-
+        VarnTiles.ask(name) {
             main.post {
-                if (closed) {
-                    return@post
-                }
-
-                asked.remove(name)
-
-                if (drawn != null) {
-                    tiles.put(name, drawn)
+                if (!closed) {
                     invalidate()
                 }
             }
         }
 
         return null
-    }
-
-    private fun fetch(name: String): Bitmap? {
-        return runCatching {
-            val connection = URL("$TILES_AT/$name.png").openConnection() as HttpURLConnection
-
-            connection.setRequestProperty("User-Agent", AGENT)
-            connection.connectTimeout = 10000
-            connection.readTimeout = 10000
-
-            connection.inputStream.use { BitmapFactory.decodeStream(it) }
-        }.getOrNull()
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -374,9 +337,6 @@ class VarnMapView(context: Context) : View(context), VarnSettling, VarnReleasing
 
     private companion object {
         const val TILE = 256.0
-        const val HELD = 24 * 1024
-        const val TILES_AT = "https://tile.openstreetmap.org"
         const val CREDIT = "© OpenStreetMap"
-        const val AGENT = "varn-gui"
     }
 }
